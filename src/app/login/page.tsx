@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FileCheck2, Loader2, LockKeyhole, Mail, MessageCircle, ShieldCheck } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
@@ -111,6 +112,15 @@ export default function LoginPage() {
               </div>
             </label>
 
+            <div className="flex justify-end">
+              <Link
+                href="/recuperar-senha"
+                className="text-xs font-medium text-brand-600 hover:underline"
+              >
+                Esqueci minha senha
+              </Link>
+            </div>
+
             {erro && (
               <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
                 {erro}
@@ -127,7 +137,14 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-xs text-slate-400">
+          <p className="mt-6 text-center text-sm text-slate-500">
+            Ainda não tem conta?{" "}
+            <Link href="/cadastro" className="font-medium text-brand-600 hover:underline">
+              Criar conta gratuita no beta
+            </Link>
+          </p>
+
+          <p className="mt-4 text-center text-xs text-slate-400">
             Perdeu o acesso?{" "}
             <a
               href={linkSuporte}
