@@ -66,6 +66,9 @@ export default function LandingPage() {
         <div className="flex items-center gap-2 font-semibold">
           <FileCheck2 className="h-6 w-6 text-brand-500" aria-hidden />
           Agência Fiscal
+          <span className="rounded-full bg-brand-500/15 px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-brand-500">
+            Beta
+          </span>
         </div>
         <nav className="flex items-center gap-4 text-sm">
           <a href="#precos" className="hidden text-slate-300 hover:text-white sm:block">
@@ -99,10 +102,12 @@ export default function LandingPage() {
             href="/login"
             className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-7 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-500/25 transition hover:bg-brand-600"
           >
-            Começar Teste Gratuito de 14 dias
+            Entrar no Beta Gratuito
             <ArrowRight className="h-5 w-5" aria-hidden />
           </Link>
-          <span className="text-xs text-slate-400">Sem cartão de crédito · Cancele com um clique</span>
+          <span className="text-xs text-slate-400">
+            100% grátis durante o beta · Sem cartão de crédito · Saia quando quiser
+          </span>
         </div>
 
         {/* Linha do tempo do retry */}
@@ -233,30 +238,36 @@ export default function LandingPage() {
       <section id="precos" className="border-t border-slate-800 bg-slate-900/40 py-20">
         <div className="mx-auto max-w-6xl px-6">
           <div className="mx-auto mb-12 max-w-2xl text-center">
-            <h2 className="text-3xl font-bold">Um plano. Um preço. Sem letra miúda.</h2>
+            <h2 className="text-3xl font-bold">
+              Grátis durante o beta. <span className="text-brand-500">Sem pegadinha.</span>
+            </h2>
             <p className="mt-3 text-slate-300">
-              Sem tabela confusa de planos, sem cobrança por nota emitida, sem surpresa no boleto.
+              Estamos em fase beta aberta: você usa tudo de graça e, em troca, nos conta o que
+              funcionou e o que precisa melhorar. Justo, não?
             </p>
           </div>
 
           <div className="mx-auto max-w-md rounded-3xl border border-brand-500/40 bg-slate-900 p-8 shadow-2xl shadow-brand-500/10">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Plano Completo</h3>
-              <span className="rounded-full bg-brand-500/15 px-3 py-1 text-xs font-medium text-brand-500">
-                14 dias grátis
+              <h3 className="text-lg font-semibold">Acesso Beta Completo</h3>
+              <span className="rounded-full bg-green-500/15 px-3 py-1 text-xs font-medium text-green-400">
+                Fase de testes
               </span>
             </div>
             <p className="mt-5">
-              <span className="text-5xl font-bold tracking-tight">R$ 199,99</span>
-              <span className="text-slate-400">/mês</span>
+              <span className="text-5xl font-bold tracking-tight">R$ 0</span>
+              <span className="text-slate-400">/mês durante o beta</span>
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Preço planejado após o beta: R$ 199,99/mês — beta testers terão condição especial.
             </p>
 
             <ul className="mt-7 space-y-3 text-sm">
               {[
-                "Notas ilimitadas com Motor de Retry Automático",
-                "Adaptado ao IBS/CBS e ao Emissor Nacional",
+                "Todos os recursos liberados, sem limite artificial",
+                "Motor de Retry Automático adaptado ao IBS/CBS",
                 "Emissão automática a cada Pix confirmado",
-                "Suporte humano via WhatsApp em até 60 min",
+                "Linha direta com quem constrói o produto, via WhatsApp",
                 "Painel em tempo real com status de cada nota",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2.5">
@@ -270,8 +281,20 @@ export default function LandingPage() {
               <p className="flex items-start gap-2 text-sm text-green-300">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                 <span>
-                  <strong>Cancele com um clique.</strong> Sem contratos abusivos, sem fidelidade,
-                  sem multa. Se não fizer sentido, você sai na hora.
+                  <strong>Nossa promessa:</strong> ninguém vira assinante sem pedir. Quando o beta
+                  terminar, avisamos com antecedência — você decide se continua, e seus dados são
+                  seus (exporte ou apague quando quiser).
+                </span>
+              </p>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+              <p className="flex items-start gap-2 text-xs text-amber-300">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                <span>
+                  <strong>Transparência:</strong> por ser um produto em testes, você pode encontrar
+                  bugs. É exatamente por isso que o acesso é gratuito — e cada aviso seu deixa o
+                  produto melhor.
                 </span>
               </p>
             </div>
@@ -280,11 +303,11 @@ export default function LandingPage() {
               href="/login"
               className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3.5 font-semibold text-white transition hover:bg-brand-600"
             >
-              Começar Teste Gratuito de 14 dias
+              Entrar no Beta Gratuito
               <ArrowRight className="h-5 w-5" aria-hidden />
             </Link>
             <p className="mt-3 text-center text-xs text-slate-500">
-              Sem cartão de crédito no teste.
+              Sem cartão de crédito. Sem cobrança automática no futuro.
             </p>
           </div>
         </div>
@@ -301,7 +324,7 @@ export default function LandingPage() {
               href="/login"
               className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-7 py-3.5 font-semibold text-white transition hover:bg-brand-600"
             >
-              Criar minha conta grátis
+              Entrar no Beta Gratuito
               <ArrowRight className="h-5 w-5" aria-hidden />
             </Link>
             <a
@@ -321,18 +344,26 @@ export default function LandingPage() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-slate-500 sm:flex-row">
           <div className="flex items-center gap-2">
             <FileCheck2 className="h-4 w-4" aria-hidden />
-            Agência Fiscal © 2026
+            Agência Fiscal © 2026 · versão beta
           </div>
           <div className="flex items-center gap-5">
             <span className="inline-flex items-center gap-1.5">
               <Timer className="h-3.5 w-3.5" aria-hidden /> Suporte em até 60 min
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Wallet className="h-3.5 w-3.5" aria-hidden /> Sem multa de cancelamento
+              <Wallet className="h-3.5 w-3.5" aria-hidden /> Grátis durante o beta
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Clock className="h-3.5 w-3.5" aria-hidden /> Retry 24/7
             </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link href="/termos" className="hover:text-slate-300">
+              Termos do Beta
+            </Link>
+            <Link href="/privacidade" className="hover:text-slate-300">
+              Privacidade
+            </Link>
           </div>
         </div>
       </footer>
