@@ -210,7 +210,7 @@ export const emitirNfse = inngest.createFunction(
 
       // ---- Erro transiente: agendar retry se ainda há tentativas --------
       if (tentativa < MAX_TENTATIVAS) {
-        const delay = RETRY_DELAYS[tentativa - 1];
+        const delay = delayParaTentativa(tentativa);
 
         await step.run(`atualizar-contador-${tentativa}`, async () => {
           await db
@@ -299,7 +299,7 @@ async function falharDefinitivamente(
     const { error } = await db.rpc("transicionar_status_nota", {
       p_nota_id: p.notaId,
       p_novo_status: "falhou",
-      p_erro_codigo: p.erro.codigo,
+      p_erro_codigo: p.erro.codigo ?? undefined,
       p_erro_msg: p.erro.mensagem,
     });
     if (error) throw new Error(`Transição para falhou falhou: ${error.message}`);
@@ -320,4 +320,17 @@ async function falharDefinitivamente(
 function proximaTentativaIso(delay: (typeof RETRY_DELAYS)[number]): string {
   const ms = { "5m": 5 * 60_000, "15m": 15 * 60_000, "1h": 60 * 60_000 }[delay];
   return new Date(Date.now() + ms).toISOString();
+}
+
+/**
+ * Acesso seguro a RETRY_DELAYS por tentativa (1-indexado).
+ * Só é chamado quando `tentativa < MAX_TENTATIVAS`, então sempre está dentro
+ * do intervalo — o erro abaixo é defensivo (nunca deve disparar em produção).
+ */
+function delayParaTentativa(tentativa: number): (typeof RETRY_DELAYS)[number] {
+  const delay = RETRY_DELAYS[tentativa - 1];
+  if (delay === undefined) {
+    throw new Error(`Tentativa ${tentativa} fora do intervalo de RETRY_DELAYS (bug no motor de retry).`);
+  }
+  return delay;
 }
