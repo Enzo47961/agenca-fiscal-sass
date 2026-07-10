@@ -173,7 +173,7 @@ export default async function DashboardPage() {
                     <td className="px-5 py-3 tabular-nums">{nota.numeroNfse ?? "—"}</td>
                     <td className="px-5 py-3 text-xs text-slate-500">
                       {nota.status === "reprocessando" && nota.proximaTentativaEm
-                        ? `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR")}`
+                        ? `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`
                         : nota.status === "falhou"
                           ? (nota.ultimoErro ?? "Erro na emissão")
                           : "—"}
