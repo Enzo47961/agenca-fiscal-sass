@@ -38,10 +38,30 @@ export function createSessionClient() {
 export async function empresaDaSessao(
   db: ReturnType<typeof createSessionClient>,
 ): Promise<{ empresaId: string; userId: string } | null> {
+  const estado = await estadoDaSessao(db);
+  return estado.tipo === "com_empresa"
+    ? { empresaId: estado.empresaId, userId: estado.userId }
+    : null;
+}
+
+export type EstadoSessao =
+  | { tipo: "deslogado" }
+  | { tipo: "sem_empresa"; userId: string; email: string | null }
+  | { tipo: "com_empresa"; userId: string; empresaId: string };
+
+/**
+ * Distingue os três estados possíveis da sessão:
+ * - "deslogado"    → mandar para /login
+ * - "sem_empresa"  → logado mas sem vínculo em empresa_membros → /onboarding
+ * - "com_empresa"  → fluxo normal do painel
+ */
+export async function estadoDaSessao(
+  db: ReturnType<typeof createSessionClient>,
+): Promise<EstadoSessao> {
   const {
     data: { user },
   } = await db.auth.getUser();
-  if (!user) return null;
+  if (!user) return { tipo: "deslogado" };
 
   const { data: membro } = await db
     .from("empresa_membros")
@@ -50,6 +70,6 @@ export async function empresaDaSessao(
     .limit(1)
     .maybeSingle();
 
-  if (!membro) return null;
-  return { empresaId: membro.empresa_id, userId: user.id };
+  if (!membro) return { tipo: "sem_empresa", userId: user.id, email: user.email ?? null };
+  return { tipo: "com_empresa", userId: user.id, empresaId: membro.empresa_id };
 }

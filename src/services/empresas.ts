@@ -23,6 +23,40 @@ export const dadosFiscaisSchema = z.object({
 
 export type DadosFiscais = z.infer<typeof dadosFiscaisSchema>;
 
+/**
+ * Onboarding: cria a primeira empresa do usuário logado + vínculo owner +
+ * assinatura beta, atomicamente via RPC `criar_minha_empresa` (SECURITY
+ * DEFINER no banco — o usuário só consegue criar empresa para si mesmo).
+ */
+export async function criarEmpresaComOwner(
+  db: SupabaseClient<Database>,
+  dados: DadosFiscais,
+): Promise<{ empresaId: string }> {
+  const d = dadosFiscaisSchema.parse(dados);
+
+  const { data, error } = await db.rpc("criar_minha_empresa", {
+    p_razao_social: d.razaoSocial,
+    p_cnpj: d.cnpj,
+    p_codigo_municipio_ibge: d.codigoMunicipioIbge,
+    p_email_contato: d.emailContato,
+    p_regime_tributario: d.regimeTributario,
+    p_nome_fantasia: d.nomeFantasia,
+    p_inscricao_municipal: d.inscricaoMunicipal,
+  });
+
+  if (error) {
+    if (error.message.includes("cnpj_ja_cadastrado")) {
+      throw new Error("Este CNPJ já está cadastrado em outra conta. Fale com o suporte.");
+    }
+    if (error.message.includes("usuario_ja_tem_empresa")) {
+      throw new Error("Sua conta já tem uma empresa vinculada. Recarregue a página.");
+    }
+    throw new Error(`Não foi possível criar a empresa: ${error.message}`);
+  }
+
+  return { empresaId: data };
+}
+
 export async function atualizarDadosFiscais(
   db: SupabaseClient<Database>,
   params: { empresaId: string; dados: DadosFiscais },

@@ -374,6 +374,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      criar_minha_empresa: {
+        Args: {
+          p_cnpj: string
+          p_codigo_municipio_ibge: string
+          p_email_contato: string
+          p_inscricao_municipal?: string
+          p_nome_fantasia?: string
+          p_razao_social: string
+          p_regime_tributario?: string
+        }
+        Returns: string
+      }
       empresas_do_usuario: { Args: never; Returns: string[] }
       transicionar_status_nota: {
         Args: {

@@ -10,7 +10,7 @@ import {
   Wallet,
   XCircle,
 } from "lucide-react";
-import { createSessionClient, empresaDaSessao } from "@/lib/supabase/server";
+import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { statusDasNotas, resumoBilling } from "@/services/dashboard";
 import { formatarCentavos, type NotaStatus } from "@/types/domain";
 import { publicEnv } from "@/lib/env";
@@ -29,12 +29,13 @@ const STATUS_UI: Record<
 
 export default async function DashboardPage() {
   const db = createSessionClient();
-  const sessao = await empresaDaSessao(db);
-  if (!sessao) redirect("/login");
+  const estado = await estadoDaSessao(db);
+  if (estado.tipo === "deslogado") redirect("/login");
+  if (estado.tipo === "sem_empresa") redirect("/onboarding"); // 1º acesso: completar cadastro
 
   const [notas, billing] = await Promise.all([
-    statusDasNotas(db, { empresaId: sessao.empresaId }),
-    resumoBilling(db, { empresaId: sessao.empresaId }),
+    statusDasNotas(db, { empresaId: estado.empresaId }),
+    resumoBilling(db, { empresaId: estado.empresaId }),
   ]);
 
   const whatsapp = publicEnv().NEXT_PUBLIC_WHATSAPP_SUPORTE;

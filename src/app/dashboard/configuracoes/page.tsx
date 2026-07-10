@@ -1,15 +1,17 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, Building2, ShieldCheck } from "lucide-react";
-import { createSessionClient, empresaDaSessao } from "@/lib/supabase/server";
+import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { FormularioConfiguracoes } from "./formulario";
 
 export const dynamic = "force-dynamic";
 
 export default async function ConfiguracoesPage() {
   const db = createSessionClient();
-  const sessao = await empresaDaSessao(db);
-  if (!sessao) redirect("/login");
+  const estado = await estadoDaSessao(db);
+  if (estado.tipo === "deslogado") redirect("/login");
+  if (estado.tipo === "sem_empresa") redirect("/onboarding");
+  const sessao = { empresaId: estado.empresaId };
 
   const { data: empresa } = await db
     .from("empresas")
