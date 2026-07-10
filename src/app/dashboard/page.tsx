@@ -4,9 +4,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  FilePlus2,
   MessageCircle,
+  Receipt,
   RefreshCw,
   Settings,
+  Users,
   Wallet,
   XCircle,
 } from "lucide-react";
@@ -53,7 +56,28 @@ export default async function DashboardPage() {
             Emissão de NFS-e com reprocessamento automático
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href="/dashboard/clientes"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+          >
+            <Users className="h-4 w-4" aria-hidden />
+            Clientes
+          </Link>
+          <Link
+            href="/dashboard/cobrancas/nova"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+          >
+            <Receipt className="h-4 w-4" aria-hidden />
+            Nova cobrança
+          </Link>
+          <Link
+            href="/dashboard/notas/nova"
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+          >
+            <FilePlus2 className="h-4 w-4" aria-hidden />
+            Emitir nota
+          </Link>
           <Link
             href="/dashboard/configuracoes"
             className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"

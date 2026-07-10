@@ -10,6 +10,10 @@ const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   /** Token combinado com o Asaas para autenticar webhooks (header asaas-access-token). */
   ASAAS_WEBHOOK_TOKEN: z.string().min(16),
+  /** Chave da API do Asaas (Configurações → Integrações). Opcional até ativar cobranças. */
+  ASAAS_API_KEY: z.string().min(1).optional(),
+  /** Produção: https://api.asaas.com/v3 — padrão é o sandbox para testes. */
+  ASAAS_BASE_URL: z.string().url().default("https://api-sandbox.asaas.com/v3"),
   /** Chave AES-256 (base64, 32 bytes) para criptografar certificados A1 em repouso. */
   CERT_ENCRYPTION_KEY: z
     .string()

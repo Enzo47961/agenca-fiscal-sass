@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { serverEnv } from "@/lib/env";
 import { processarPagamentoConfirmado } from "@/services/pagamentos";
+import { referenciaNfseSchema } from "@/services/cobrancas";
 
 /**
  * Webhook de confirmação de pagamento (Asaas / Pix).
@@ -29,14 +30,9 @@ const asaasWebhookSchema = z.object({
   }),
 });
 
-const referenciaSchema = z.object({
-  empresaId: z.string().uuid(),
-  clienteId: z.string().uuid(),
-  descricaoServico: z.string().min(1),
-  codigoServico: z.string().min(1),
-  aliquotaIss: z.number().min(0).max(1),
-  issRetido: z.boolean().default(false),
-});
+// Contrato compartilhado com a criação de cobrança (services/cobrancas.ts):
+// os dois lados importam o MESMO schema — mudou lá, mudou aqui junto.
+const referenciaSchema = referenciaNfseSchema;
 
 const EVENTOS_PAGAMENTO_CONFIRMADO = new Set(["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"]);
 
