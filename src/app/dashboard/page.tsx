@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  FileDown,
   FilePlus2,
   MessageCircle,
   Receipt,
@@ -49,38 +50,38 @@ export default async function DashboardPage() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
       {/* Cabeçalho */}
-      <header className="mb-8 flex items-center justify-between">
+      <header className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Painel de Faturamento</h1>
           <p className="text-sm text-slate-500">
             Emissão de NFS-e com reprocessamento automático
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <nav aria-label="Ações do painel" className="flex flex-nowrap items-center gap-2 overflow-x-auto">
           <Link
             href="/dashboard/clientes"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
           >
             <Users className="h-4 w-4" aria-hidden />
             Clientes
           </Link>
           <Link
             href="/dashboard/cobrancas/nova"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
           >
             <Receipt className="h-4 w-4" aria-hidden />
             Nova cobrança
           </Link>
           <Link
             href="/dashboard/notas/nova"
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700"
           >
             <FilePlus2 className="h-4 w-4" aria-hidden />
             Emitir nota
           </Link>
           <Link
             href="/dashboard/configuracoes"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
           >
             <Settings className="h-4 w-4" aria-hidden />
             Configurações
@@ -89,12 +90,12 @@ export default async function DashboardPage() {
             href={linkWhatsApp}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
           >
             <MessageCircle className="h-4 w-4" aria-hidden />
-            Suporte Humano via WhatsApp
+            Suporte via WhatsApp
           </a>
-        </div>
+        </nav>
       </header>
 
       {/* Alerta de inadimplência */}
@@ -172,11 +173,23 @@ export default async function DashboardPage() {
                     </td>
                     <td className="px-5 py-3 tabular-nums">{nota.numeroNfse ?? "—"}</td>
                     <td className="px-5 py-3 text-xs text-slate-500">
-                      {nota.status === "reprocessando" && nota.proximaTentativaEm
-                        ? `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`
-                        : nota.status === "falhou"
-                          ? (nota.ultimoErro ?? "Erro na emissão")
-                          : "—"}
+                      {nota.status === "emitida" && nota.urlPdf ? (
+                        <a
+                          href={nota.urlPdf}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline"
+                        >
+                          <FileDown className="h-3.5 w-3.5" aria-hidden />
+                          Ver PDF
+                        </a>
+                      ) : nota.status === "reprocessando" && nota.proximaTentativaEm ? (
+                        `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`
+                      ) : nota.status === "falhou" ? (
+                        (nota.ultimoErro ?? "Erro na emissão")
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
                 );

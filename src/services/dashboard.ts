@@ -20,6 +20,8 @@ export interface ResumoNotas {
     tentativas: number;
     proximaTentativaEm: string | null;
     ultimoErro: string | null;
+    urlPdf: string | null;
+    urlXml: string | null;
     criadaEm: string;
   }>;
   nota?: {
@@ -50,7 +52,7 @@ export async function statusDasNotas(
     db
       .from("notas_fiscais")
       .select(
-        "id, status, valor_servico_centavos, descricao_servico, numero_nfse, tentativas, proxima_tentativa_em, ultimo_erro, created_at",
+        "id, status, valor_servico_centavos, descricao_servico, numero_nfse, tentativas, proxima_tentativa_em, ultimo_erro, url_pdf, url_xml, created_at",
       )
       .eq("empresa_id", params.empresaId)
       .order("created_at", { ascending: false })
@@ -84,6 +86,8 @@ export async function statusDasNotas(
       tentativas: n.tentativas,
       proximaTentativaEm: n.proxima_tentativa_em,
       ultimoErro: n.ultimo_erro,
+      urlPdf: n.url_pdf,
+      urlXml: n.url_xml,
       criadaEm: n.created_at,
     })),
   };

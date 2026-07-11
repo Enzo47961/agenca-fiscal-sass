@@ -13,6 +13,7 @@ import {
   isFiscalError,
   type EmitirNfseResult,
 } from "@/lib/fiscal/provider";
+import { emailConfigurado, emailNotaEmitida, enviarEmail } from "@/lib/email/resend";
 
 /**
  * MOTOR DE RETRY RESILIENTE (regras 5–13 do CLAUDE.md)
@@ -185,6 +186,39 @@ export const emitirNfse = inngest.createFunction(
             p_novo_status: "emitida",
           });
           if (e2) throw new Error(`Transição para emitida falhou: ${e2.message}`);
+        });
+
+        // E-mail para o cliente final — NÃO-FATAL: a nota já foi emitida com
+        // sucesso; falha de e-mail é logada e persistida no retorno do step,
+        // nunca relançada (não pode reverter nem reprocessar a emissão).
+        await step.run("enviar-email-cliente", async () => {
+          if (!cliente.email) {
+            return { enviado: false as const, motivo: "cliente-sem-email" };
+          }
+          if (!emailConfigurado()) {
+            logger.warn("RESEND_API_KEY ausente — e-mail da nota não enviado", { notaId });
+            return { enviado: false as const, motivo: "email-nao-configurado" };
+          }
+          try {
+            const template = emailNotaEmitida({
+              nomeCliente: cliente.nome,
+              nomeEmpresa: empresa.nome_fantasia ?? empresa.razao_social,
+              numeroNfse: resultado.emissao.numeroNfse,
+              urlPdf: resultado.emissao.urlPdf,
+            });
+            const { emailId } = await enviarEmail({
+              para: cliente.email,
+              assunto: template.assunto,
+              html: template.html,
+            });
+            return { enviado: true as const, emailId };
+          } catch (e) {
+            logger.error("Falha ao enviar e-mail da nota (não-fatal)", {
+              notaId,
+              erro: e instanceof Error ? e.message : String(e),
+            });
+            return { enviado: false as const, motivo: "erro-envio" };
+          }
         });
 
         await step.sendEvent("evento-concluida", {

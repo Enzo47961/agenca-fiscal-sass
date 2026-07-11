@@ -14,6 +14,10 @@ const serverEnvSchema = z.object({
   ASAAS_API_KEY: z.string().min(1).optional(),
   /** Produção: https://api.asaas.com/v3 — padrão é o sandbox para testes. */
   ASAAS_BASE_URL: z.string().url().default("https://api-sandbox.asaas.com/v3"),
+  /** Chave da API do Resend (resend.com). Opcional: sem ela, e-mails são pulados com log. */
+  RESEND_API_KEY: z.string().min(1).optional(),
+  /** Remetente dos e-mails. Domínio precisa estar verificado no Resend. */
+  EMAIL_REMETENTE: z.string().default("Agência Fiscal <onboarding@resend.dev>"),
   /** Chave AES-256 (base64, 32 bytes) para criptografar certificados A1 em repouso. */
   CERT_ENCRYPTION_KEY: z
     .string()
