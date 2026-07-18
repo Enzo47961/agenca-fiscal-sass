@@ -52,6 +52,7 @@ export type Database = {
           periodo_atual_inicio: string
           plano: Database["public"]["Enums"]["plano_tipo"]
           preco_centavos: number
+          preco_excedente_centavos: number
           status: Database["public"]["Enums"]["assinatura_status"]
           trial_ate: string | null
           updated_at: string
@@ -68,6 +69,7 @@ export type Database = {
           periodo_atual_inicio?: string
           plano?: Database["public"]["Enums"]["plano_tipo"]
           preco_centavos?: number
+          preco_excedente_centavos?: number
           status?: Database["public"]["Enums"]["assinatura_status"]
           trial_ate?: string | null
           updated_at?: string
@@ -84,6 +86,7 @@ export type Database = {
           periodo_atual_inicio?: string
           plano?: Database["public"]["Enums"]["plano_tipo"]
           preco_centavos?: number
+          preco_excedente_centavos?: number
           status?: Database["public"]["Enums"]["assinatura_status"]
           trial_ate?: string | null
           updated_at?: string
@@ -216,6 +219,59 @@ export type Database = {
         }
         Relationships: []
       }
+      faturas_excedente: {
+        Row: {
+          asaas_payment_id: string | null
+          competencia: string
+          created_at: string
+          empresa_id: string
+          erro: string | null
+          id: string
+          link_fatura: string | null
+          preco_unitario_centavos: number
+          quantidade_notas: number
+          status: string
+          updated_at: string
+          valor_total_centavos: number
+        }
+        Insert: {
+          asaas_payment_id?: string | null
+          competencia: string
+          created_at?: string
+          empresa_id: string
+          erro?: string | null
+          id?: string
+          link_fatura?: string | null
+          preco_unitario_centavos: number
+          quantidade_notas: number
+          status?: string
+          updated_at?: string
+          valor_total_centavos: number
+        }
+        Update: {
+          asaas_payment_id?: string | null
+          competencia?: string
+          created_at?: string
+          empresa_id?: string
+          erro?: string | null
+          id?: string
+          link_fatura?: string | null
+          preco_unitario_centavos?: number
+          quantidade_notas?: number
+          status?: string
+          updated_at?: string
+          valor_total_centavos?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "faturas_excedente_empresa_id_fkey"
+            columns: ["empresa_id"]
+            isOneToOne: false
+            referencedRelation: "empresas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notas_fiscais: {
         Row: {
           aliquota_iss: number
@@ -227,7 +283,9 @@ export type Database = {
           descricao_servico: string
           emitida_em: string | null
           empresa_id: string
+          excedente: boolean
           falha_definitiva_em: string | null
+          fatura_excedente_id: string | null
           id: string
           iss_retido: boolean
           max_tentativas: number
@@ -254,7 +312,9 @@ export type Database = {
           descricao_servico: string
           emitida_em?: string | null
           empresa_id: string
+          excedente?: boolean
           falha_definitiva_em?: string | null
+          fatura_excedente_id?: string | null
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -281,7 +341,9 @@ export type Database = {
           descricao_servico?: string
           emitida_em?: string | null
           empresa_id?: string
+          excedente?: boolean
           falha_definitiva_em?: string | null
+          fatura_excedente_id?: string | null
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -299,6 +361,13 @@ export type Database = {
           valor_servico_centavos?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "notas_fiscais_fatura_excedente_id_fkey"
+            columns: ["fatura_excedente_id"]
+            isOneToOne: false
+            referencedRelation: "faturas_excedente"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "notas_fiscais_cliente_id_fkey"
             columns: ["cliente_id"]
@@ -387,6 +456,10 @@ export type Database = {
         Returns: string
       }
       empresas_do_usuario: { Args: never; Returns: string[] }
+      marcar_nota_excedente: {
+        Args: { p_nota_id: string }
+        Returns: boolean
+      }
       transicionar_status_nota: {
         Args: {
           p_erro_codigo?: string
@@ -404,7 +477,9 @@ export type Database = {
           descricao_servico: string
           emitida_em: string | null
           empresa_id: string
+          excedente: boolean
           falha_definitiva_em: string | null
+          fatura_excedente_id: string | null
           id: string
           iss_retido: boolean
           max_tentativas: number

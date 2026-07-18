@@ -188,6 +188,23 @@ export const emitirNfse = inngest.createFunction(
           if (e2) throw new Error(`Transição para emitida falhou: ${e2.message}`);
         });
 
+        // Marca a nota como excedente se passou do limite do plano no mês.
+        // NÃO-FATAL: a nota já está emitida; se a marcação falhar, a emissão
+        // continua válida e o job mensal ainda pode reprocessar a contagem.
+        await step.run("marcar-excedente", async () => {
+          const { data, error } = await db.rpc("marcar_nota_excedente", {
+            p_nota_id: notaId,
+          });
+          if (error) {
+            logger.error("Falha ao marcar excedente (não-fatal)", {
+              notaId,
+              erro: error.message,
+            });
+            return { excedente: null as boolean | null };
+          }
+          return { excedente: data };
+        });
+
         // E-mail para o cliente final — NÃO-FATAL: a nota já foi emitida com
         // sucesso; falha de e-mail é logada e persistida no retorno do step,
         // nunca relançada (não pode reverter nem reprocessar a emissão).

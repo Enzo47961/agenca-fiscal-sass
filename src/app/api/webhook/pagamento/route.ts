@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { serverEnv } from "@/lib/env";
 import { processarPagamentoConfirmado } from "@/services/pagamentos";
 import { referenciaNfseSchema } from "@/services/cobrancas";
+import { faturaExcedenteRefSchema, marcarFaturaExcedentePaga } from "@/services/faturas";
 
 /**
  * Webhook de confirmação de pagamento (Asaas / Pix).
@@ -57,15 +58,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, ignorado: corpo.data.event });
   }
 
-  let referencia: z.infer<typeof referenciaSchema>;
+  let referenciaBruta: unknown;
   try {
-    referencia = referenciaSchema.parse(JSON.parse(corpo.data.payment.externalReference));
+    referenciaBruta = JSON.parse(corpo.data.payment.externalReference);
   } catch {
     return NextResponse.json({ erro: "externalReference inválida" }, { status: 400 });
   }
 
-  // 3. Delegar à camada de serviço (regra 20) — cria nota pendente + evento Inngest
   const db = createAdminClient();
+
+  // 3a. Fatura de EXCEDENTE (cobrança da própria plataforma): dá baixa e encerra.
+  // NÃO gera nota — é a agência pagando pelo uso acima do limite (regra 5 intacta).
+  const fatura = faturaExcedenteRefSchema.safeParse(referenciaBruta);
+  if (fatura.success) {
+    const r = await marcarFaturaExcedentePaga(db, {
+      faturaId: fatura.data.faturaId,
+      empresaId: fatura.data.empresaId,
+    });
+    return NextResponse.json({ ok: true, faturaExcedente: fatura.data.faturaId, atualizada: r.atualizada });
+  }
+
+  // 3b. Cobrança que gera NFS-e (contrato existente)
+  const referenciaParse = referenciaSchema.safeParse(referenciaBruta);
+  if (!referenciaParse.success) {
+    return NextResponse.json({ erro: "externalReference inválida" }, { status: 400 });
+  }
+  const referencia = referenciaParse.data;
+
   const resultado = await processarPagamentoConfirmado(db, {
     pagamentoId: corpo.data.payment.id,
     valorCentavos: Math.round(corpo.data.payment.value * 100), // regra 15
