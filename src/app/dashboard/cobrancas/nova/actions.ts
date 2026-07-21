@@ -38,6 +38,8 @@ export async function criarCobrancaAction(formData: FormData): Promise<CobrancaR
     vencimento: formData.get("vencimento"),
     aliquotaIss: Number(formData.get("aliquotaIss") ?? "0") / 100, // % → fração
     issRetido: formData.get("issRetido") === "on",
+    codigoNbs: (formData.get("codigoNbs") as string | null)?.trim() || undefined,
+    regimeIbsCbs: (formData.get("regimeIbsCbs") as string | null) || undefined,
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

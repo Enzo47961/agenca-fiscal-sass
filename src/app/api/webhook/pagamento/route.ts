@@ -94,6 +94,11 @@ export async function POST(request: NextRequest) {
     codigoServico: referencia.codigoServico,
     aliquotaIss: referencia.aliquotaIss,
     issRetido: referencia.issRetido,
+    codigoNbs: referencia.codigoNbs ?? null,
+    regimeIbsCbs: referencia.regimeIbsCbs,
+    // Split payment (reforma): quando o Asaas/adquirente expuser a retenção de
+    // CBS/IBS na liquidação, preencher valorLiquidoCentavos e splitRetidoCentavos
+    // a partir do payload aqui. Enquanto não vale (pré-2027), ficam nulos.
   });
 
   return NextResponse.json({ ok: true, notaId: resultado.notaId });

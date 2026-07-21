@@ -1,6 +1,7 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { type Database } from "@/types/database";
+import { REGIME_IBSCBS } from "@/lib/fiscal/reforma";
 import {
   criarCobranca,
   obterOuCriarCustomer,
@@ -23,6 +24,9 @@ export const referenciaNfseSchema = z.object({
   codigoServico: z.string().min(1),
   aliquotaIss: z.number().min(0).max(1),
   issRetido: z.boolean().default(false),
+  // Reforma tributária — viaja na cobrança para a nota emitida no pagamento
+  codigoNbs: z.string().min(1).max(30).nullish(),
+  regimeIbsCbs: z.enum(REGIME_IBSCBS).default("padrao"),
 });
 
 export type ReferenciaNfse = z.infer<typeof referenciaNfseSchema>;
@@ -37,6 +41,8 @@ export const novaCobrancaSchema = z.object({
   vencimento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data de vencimento inválida"),
   aliquotaIss: z.number().min(0).max(1),
   issRetido: z.boolean().default(false),
+  codigoNbs: z.string().min(1).max(30).nullish(),
+  regimeIbsCbs: z.enum(REGIME_IBSCBS).default("padrao"),
 });
 
 export type NovaCobrancaInput = z.infer<typeof novaCobrancaSchema>;
@@ -73,6 +79,8 @@ export async function criarCobrancaParaCliente(
     codigoServico: d.codigoServico,
     aliquotaIss: d.aliquotaIss,
     issRetido: d.issRetido,
+    codigoNbs: d.codigoNbs ?? null,
+    regimeIbsCbs: d.regimeIbsCbs,
   });
 
   return criarCobranca(asaas, {

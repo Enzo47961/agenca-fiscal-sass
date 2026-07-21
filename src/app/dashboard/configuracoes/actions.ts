@@ -33,6 +33,8 @@ export async function salvarDadosFiscaisAction(formData: FormData): Promise<Acti
     codigoMunicipioIbge: String(formData.get("codigoMunicipioIbge") ?? "").replace(/\D/g, ""),
     regimeTributario: formData.get("regimeTributario"),
     emailContato: formData.get("emailContato"),
+    cnae: String(formData.get("cnae") ?? "").replace(/\D/g, "") || undefined,
+    simplesPorFora: formData.get("simplesPorFora") === "on",
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

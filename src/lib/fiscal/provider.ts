@@ -3,6 +3,7 @@
  * O motor de retry NÃO conhece providers concretos — só esta interface
  * e as duas classes de erro (regras 8 e 21 do CLAUDE.md).
  */
+import { type RegimeIbsCbs } from "./reforma";
 
 // ---------------------------------------------------------------------------
 // Erros classificados — a distinção transiente/permanente dirige o retry
@@ -71,6 +72,16 @@ export interface EmitirNfseInput {
     aliquotaIss: number;
     issRetido: boolean;
     competencia: string; // ISO date (yyyy-mm-dd)
+    /** Código NBS (Nomenclatura Brasileira de Serviços) — reforma. Null no legado. */
+    codigoNbs: string | null;
+    /** Tributos da reforma (CBS/IBS) já calculados. Zerados no modelo antigo. */
+    reforma: {
+      regime: RegimeIbsCbs;
+      cbsAliquota: number;
+      ibsAliquota: number;
+      cbsValorCentavos: number;
+      ibsValorCentavos: number;
+    };
   };
 }
 

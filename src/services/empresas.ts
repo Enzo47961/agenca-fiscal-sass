@@ -19,6 +19,12 @@ export const dadosFiscaisSchema = z.object({
   codigoMunicipioIbge: z.string().regex(/^\d{7}$/, "Código IBGE deve ter 7 dígitos"),
   regimeTributario: z.enum(["simples_nacional", "lucro_presumido", "lucro_real", "mei"]),
   emailContato: z.string().email(),
+  // Reforma tributária: CNAE (base do enquadramento) e escolha do Simples
+  cnae: z
+    .string()
+    .regex(/^\d{7}$/, "CNAE deve ter 7 dígitos (somente números)")
+    .optional(),
+  simplesPorFora: z.boolean().default(false),
 });
 
 export type DadosFiscais = z.infer<typeof dadosFiscaisSchema>;
@@ -73,6 +79,8 @@ export async function atualizarDadosFiscais(
       codigo_municipio_ibge: d.codigoMunicipioIbge,
       regime_tributario: d.regimeTributario,
       email_contato: d.emailContato,
+      cnae: d.cnae ?? null,
+      simples_por_fora: d.simplesPorFora,
     })
     .eq("id", params.empresaId); // RLS restringe a admins/owners da empresa
 

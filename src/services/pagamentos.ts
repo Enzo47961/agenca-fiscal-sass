@@ -2,6 +2,7 @@ import { type SupabaseClient } from "@supabase/supabase-js";
 import { type Database } from "@/types/database";
 import { solicitarEmissao } from "./notas";
 import { type Centavos } from "@/types/domain";
+import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 
 /**
  * Pagamento confirmado (Pix/Asaas) → nota fiscal `pendente` + evento Inngest.
@@ -19,6 +20,11 @@ export async function processarPagamentoConfirmado(
     codigoServico: string;
     aliquotaIss: number;
     issRetido: boolean;
+    codigoNbs?: string | null;
+    regimeIbsCbs?: RegimeIbsCbs;
+    /** Split payment: preenchidos quando o adquirente retiver CBS/IBS na fonte. */
+    valorLiquidoCentavos?: Centavos | null;
+    splitRetidoCentavos?: Centavos | null;
   },
 ): Promise<{ notaId: string; duplicado: boolean }> {
   const marcadorPagamento = `[pgto:${input.pagamentoId}]`;
@@ -45,6 +51,10 @@ export async function processarPagamentoConfirmado(
     aliquotaIss: input.aliquotaIss,
     issRetido: input.issRetido,
     competencia: new Date().toISOString().slice(0, 10),
+    codigoNbs: input.codigoNbs ?? null,
+    regimeIbsCbs: input.regimeIbsCbs ?? "padrao",
+    valorLiquidoCentavos: input.valorLiquidoCentavos ?? null,
+    splitRetidoCentavos: input.splitRetidoCentavos ?? null,
   });
 
   return { notaId, duplicado: false };

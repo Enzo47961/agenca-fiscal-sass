@@ -33,6 +33,8 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     aliquotaIss: Number(formData.get("aliquotaIss") ?? "0") / 100, // % → fração
     issRetido: formData.get("issRetido") === "on",
     competencia: new Date().toISOString().slice(0, 10),
+    codigoNbs: (formData.get("codigoNbs") as string | null)?.trim() || undefined,
+    regimeIbsCbs: (formData.get("regimeIbsCbs") as string | null) || undefined,
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

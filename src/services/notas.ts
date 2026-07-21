@@ -3,6 +3,7 @@ import { z } from "zod";
 import { inngest } from "@/inngest/client";
 import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
 import { type Database } from "@/types/database";
+import { REGIME_IBSCBS, calcularTributosReforma } from "@/lib/fiscal/reforma";
 
 /**
  * Ponto de entrada da emissão (regra 5 do CLAUDE.md):
@@ -20,6 +21,12 @@ export const solicitarEmissaoSchema = z.object({
   aliquotaIss: z.number().min(0).max(1),
   issRetido: z.boolean().default(false),
   competencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // Reforma tributária (opcionais — default seguro para o modelo antigo)
+  codigoNbs: z.string().min(1).max(30).nullish(),
+  regimeIbsCbs: z.enum(REGIME_IBSCBS).default("padrao"),
+  // Split payment: preenchidos só quando a liquidação retiver CBS/IBS na fonte
+  valorLiquidoCentavos: z.number().int().nonnegative().nullish(),
+  splitRetidoCentavos: z.number().int().nonnegative().nullish(),
 });
 
 export type SolicitarEmissaoInput = z.infer<typeof solicitarEmissaoSchema>;
@@ -29,6 +36,13 @@ export async function solicitarEmissao(
   input: SolicitarEmissaoInput,
 ): Promise<{ notaId: string }> {
   const dados = solicitarEmissaoSchema.parse(input);
+
+  // Destaque de CBS/IBS calculado na criação, a partir do valor, competência e regime.
+  const tributos = calcularTributosReforma({
+    baseCentavos: dados.valorServicoCentavos,
+    competencia: dados.competencia,
+    regime: dados.regimeIbsCbs,
+  });
 
   const { data: nota, error } = await db
     .from("notas_fiscais")
@@ -41,6 +55,14 @@ export async function solicitarEmissao(
       aliquota_iss: dados.aliquotaIss,
       iss_retido: dados.issRetido,
       competencia: dados.competencia,
+      codigo_nbs: dados.codigoNbs ?? null,
+      regime_ibscbs: dados.regimeIbsCbs,
+      cbs_aliquota: tributos.cbsAliquota,
+      ibs_aliquota: tributos.ibsAliquota,
+      cbs_valor_centavos: tributos.cbsValorCentavos,
+      ibs_valor_centavos: tributos.ibsValorCentavos,
+      valor_liquido_centavos: dados.valorLiquidoCentavos ?? null,
+      split_retido_centavos: dados.splitRetidoCentavos ?? null,
       status: "pendente",
     })
     .select("id, empresa_id")

@@ -16,7 +16,7 @@ export default async function ConfiguracoesPage() {
   const { data: empresa } = await db
     .from("empresas")
     .select(
-      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato",
+      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, simples_por_fora",
     )
     .eq("id", sessao.empresaId)
     .single();
@@ -62,6 +62,8 @@ export default async function ConfiguracoesPage() {
           codigoMunicipioIbge: empresa?.codigo_municipio_ibge ?? "",
           regimeTributario: empresa?.regime_tributario ?? "simples_nacional",
           emailContato: empresa?.email_contato ?? "",
+          cnae: empresa?.cnae ?? "",
+          simplesPorFora: empresa?.simples_por_fora ?? false,
         }}
       />
     </main>

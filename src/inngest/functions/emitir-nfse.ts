@@ -8,6 +8,7 @@ import {
 } from "../events";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolverProvider } from "@/lib/fiscal/providers";
+import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 import {
   FiscalErrorPermanent,
   isFiscalError,
@@ -126,6 +127,14 @@ export const emitirNfse = inngest.createFunction(
                 aliquotaIss: Number(contexto.aliquota_iss),
                 issRetido: contexto.iss_retido,
                 competencia: contexto.competencia,
+                codigoNbs: contexto.codigo_nbs,
+                reforma: {
+                  regime: contexto.regime_ibscbs as RegimeIbsCbs,
+                  cbsAliquota: Number(contexto.cbs_aliquota),
+                  ibsAliquota: Number(contexto.ibs_aliquota),
+                  cbsValorCentavos: contexto.cbs_valor_centavos,
+                  ibsValorCentavos: contexto.ibs_valor_centavos,
+                },
               },
             }));
 

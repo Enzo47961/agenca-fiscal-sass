@@ -186,9 +186,11 @@ export type Database = {
           id: string
           inscricao_municipal: string | null
           nome_fantasia: string | null
+          cnae: string | null
           provider_fiscal: string
           razao_social: string
           regime_tributario: string
+          simples_por_fora: boolean
           updated_at: string
         }
         Insert: {
@@ -212,9 +214,11 @@ export type Database = {
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
+          cnae?: string | null
           provider_fiscal?: string
           razao_social?: string
           regime_tributario?: string
+          simples_por_fora?: boolean
           updated_at?: string
         }
         Relationships: []
@@ -300,6 +304,14 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
+          cbs_aliquota: number
+          cbs_valor_centavos: number
+          codigo_nbs: string | null
+          ibs_aliquota: number
+          ibs_valor_centavos: number
+          regime_ibscbs: string
+          split_retido_centavos: number | null
+          valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
         Insert: {
@@ -329,6 +341,14 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
+          cbs_aliquota?: number
+          cbs_valor_centavos?: number
+          codigo_nbs?: string | null
+          ibs_aliquota?: number
+          ibs_valor_centavos?: number
+          regime_ibscbs?: string
+          split_retido_centavos?: number | null
+          valor_liquido_centavos?: number | null
           valor_servico_centavos: number
         }
         Update: {
@@ -358,6 +378,14 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
+          cbs_aliquota?: number
+          cbs_valor_centavos?: number
+          codigo_nbs?: string | null
+          ibs_aliquota?: number
+          ibs_valor_centavos?: number
+          regime_ibscbs?: string
+          split_retido_centavos?: number | null
+          valor_liquido_centavos?: number | null
           valor_servico_centavos?: number
         }
         Relationships: [
@@ -494,6 +522,14 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
+          cbs_aliquota: number
+          cbs_valor_centavos: number
+          codigo_nbs: string | null
+          ibs_aliquota: number
+          ibs_valor_centavos: number
+          regime_ibscbs: string
+          split_retido_centavos: number | null
+          valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
         SetofOptions: {

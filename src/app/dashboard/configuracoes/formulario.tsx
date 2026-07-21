@@ -135,6 +135,8 @@ interface DadosIniciais {
   codigoMunicipioIbge: string;
   regimeTributario: string;
   emailContato: string;
+  cnae: string;
+  simplesPorFora: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +261,36 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
           <label className="block">
             <span className="mb-1 block text-sm text-slate-600">E-mail de contato *</span>
             <input name="emailContato" type="email" required defaultValue={dadosIniciais.emailContato} className={inputClasses} />
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm text-slate-600">CNAE principal</span>
+            <input
+              name="cnae"
+              inputMode="numeric"
+              pattern="\d{7}"
+              maxLength={7}
+              placeholder="6201501"
+              defaultValue={dadosIniciais.cnae}
+              className={inputClasses}
+            />
+            <Ajuda>
+              7 dígitos, sem pontuação. Base do enquadramento no IBS/CBS da reforma — confira no seu
+              cartão CNPJ.
+            </Ajuda>
+          </label>
+
+          <label className="flex items-start gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              name="simplesPorFora"
+              defaultChecked={dadosIniciais.simplesPorFora}
+              className="mt-1 h-4 w-4 rounded border-slate-300"
+            />
+            <span className="text-sm text-slate-600">
+              Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
+              crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por dentro&quot;.
+            </span>
           </label>
         </div>
 
