@@ -1,6 +1,6 @@
 import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { serverEnv } from "@/lib/env";
+import { asaasEnv } from "@/lib/env";
 import {
   criarCobranca,
   obterOuCriarCustomer,
@@ -34,10 +34,9 @@ import { type FaturaExcedenteRef } from "@/services/faturas";
 
 const DIAS_ATE_VENCIMENTO = 7;
 
+/** Config do Asaas ou null — a montagem vive em src/lib/env.ts (regra 4). */
 function asaasConfigOuNulo(): AsaasConfig | null {
-  const env = serverEnv();
-  if (!env.ASAAS_API_KEY) return null;
-  return { apiKey: env.ASAAS_API_KEY, baseUrl: env.ASAAS_BASE_URL };
+  return asaasEnv();
 }
 
 export const cobrarExcedentes = inngest.createFunction(

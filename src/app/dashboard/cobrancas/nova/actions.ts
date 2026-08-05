@@ -1,7 +1,7 @@
 "use server";
 
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
-import { serverEnv } from "@/lib/env";
+import { asaasEnv } from "@/lib/env";
 import { criarCobrancaParaCliente, novaCobrancaSchema } from "@/services/cobrancas";
 
 export interface CobrancaResult {
@@ -18,8 +18,8 @@ export async function criarCobrancaAction(formData: FormData): Promise<CobrancaR
     return { ok: false, erro: "Sessão expirada. Faça login novamente." };
   }
 
-  const env = serverEnv();
-  if (!env.ASAAS_API_KEY) {
+  const asaas = asaasEnv();
+  if (!asaas) {
     return {
       ok: false,
       erro: "Integração com o Asaas não configurada: adicione ASAAS_API_KEY nas variáveis de ambiente.",
@@ -48,7 +48,7 @@ export async function criarCobrancaAction(formData: FormData): Promise<CobrancaR
   try {
     const cobranca = await criarCobrancaParaCliente(
       db,
-      { apiKey: env.ASAAS_API_KEY, baseUrl: env.ASAAS_BASE_URL },
+      asaas,
       { empresaId: estado.empresaId, dados: parse.data },
     );
     return { ok: true, linkFatura: cobranca.linkFatura, pagamentoId: cobranca.pagamentoId };

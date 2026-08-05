@@ -8,8 +8,14 @@ import { z } from "zod";
 const serverEnvSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
-  /** Token combinado com o Asaas para autenticar webhooks (header asaas-access-token). */
-  ASAAS_WEBHOOK_TOKEN: z.string().min(16),
+  /**
+   * Token combinado com o Asaas para autenticar webhooks (header
+   * asaas-access-token). O Asaas exige `authToken` de NO MÍNIMO 32 caracteres
+   * ao cadastrar o webhook (confirmado no schema WebhookConfigSaveRequestDTO
+   * da API v3) — validar menos que isso aqui só adiaria a falha para o
+   * momento do cadastro. Gerar com: openssl rand -hex 32
+   */
+  ASAAS_WEBHOOK_TOKEN: z.string().min(32),
   /** Chave da API do Asaas (Configurações → Integrações). Opcional até ativar cobranças. */
   ASAAS_API_KEY: z.string().min(1).optional(),
   /** Produção: https://api.asaas.com/v3 — padrão é o sandbox para testes. */
@@ -52,6 +58,23 @@ const publicEnvSchema = z.object({
 /** Uso exclusivo em código server-side (route handlers, actions, Inngest). */
 export function serverEnv() {
   return serverEnvSchema.parse(process.env);
+}
+
+/**
+ * Config do Asaas, com a obrigatoriedade da chave cobrada só aqui — mesma
+ * ideia de `focusNfeEnv()`. Retorna `null` (em vez de lançar) porque a
+ * ausência da chave é um estado ESPERADO hoje: a tela de cobrança avisa o
+ * usuário e o job de excedentes se pula com log, em vez de quebrar.
+ */
+export function asaasEnv(): { apiKey: string; baseUrl: string } | null {
+  const env = serverEnv();
+  if (!env.ASAAS_API_KEY) return null;
+  return { apiKey: env.ASAAS_API_KEY, baseUrl: env.ASAAS_BASE_URL };
+}
+
+/** `true` quando a integração com o Asaas está utilizável. */
+export function asaasConfigurado(): boolean {
+  return asaasEnv() !== null;
 }
 
 /**

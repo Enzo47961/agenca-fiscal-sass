@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { focusNfeEnv, serverEnv } from "@/lib/env";
 import { FocusNfeProvider } from "@/lib/fiscal/providers/focusnfe";
 import { isFiscalError } from "@/lib/fiscal/provider";
+import { tokenConfere } from "@/lib/webhook-token";
 
 /**
  * Webhook (gatilho) da Focus NFe.
@@ -46,7 +47,7 @@ const gatilhoFocusSchema = z.object({
 export async function POST(request: NextRequest) {
   // 1. Autenticação opcional do gatilho — antes de ler o corpo
   const tokenEsperado = serverEnv().FOCUSNFE_WEBHOOK_TOKEN;
-  if (tokenEsperado && request.headers.get("x-focusnfe-token") !== tokenEsperado) {
+  if (tokenEsperado && !tokenConfere(request.headers.get("x-focusnfe-token"), tokenEsperado)) {
     return NextResponse.json({ erro: "não autorizado" }, { status: 401 });
   }
 

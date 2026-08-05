@@ -5,6 +5,8 @@ import { serverEnv } from "@/lib/env";
 import { processarPagamentoConfirmado } from "@/services/pagamentos";
 import { referenciaNfseSchema } from "@/services/cobrancas";
 import { faturaExcedenteRefSchema, marcarFaturaExcedentePaga } from "@/services/faturas";
+import { tokenConfere } from "@/lib/webhook-token";
+import { EVENTOS_WEBHOOK_PAGAMENTO } from "@/lib/billing/asaas";
 
 /**
  * Webhook de confirmação de pagamento (Asaas / Pix).
@@ -35,12 +37,15 @@ const asaasWebhookSchema = z.object({
 // os dois lados importam o MESMO schema — mudou lá, mudou aqui junto.
 const referenciaSchema = referenciaNfseSchema;
 
-const EVENTOS_PAGAMENTO_CONFIRMADO = new Set(["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"]);
+// Mesma lista que `garantirWebhookPagamento()` assina no Asaas — importada de
+// lá de propósito, para que assinar um evento novo e tratá-lo aqui sejam a
+// mesma mudança, num arquivo só.
+const EVENTOS_PAGAMENTO_CONFIRMADO = new Set<string>(EVENTOS_WEBHOOK_PAGAMENTO);
 
 export async function POST(request: NextRequest) {
-  // 1. Autenticação do webhook — antes de ler o corpo
-  const token = request.headers.get("asaas-access-token");
-  if (!token || token !== serverEnv().ASAAS_WEBHOOK_TOKEN) {
+  // 1. Autenticação do webhook — antes de ler o corpo.
+  // Comparação em tempo constante (item M2 da auditoria).
+  if (!tokenConfere(request.headers.get("asaas-access-token"), serverEnv().ASAAS_WEBHOOK_TOKEN)) {
     return NextResponse.json({ erro: "não autorizado" }, { status: 401 });
   }
 
