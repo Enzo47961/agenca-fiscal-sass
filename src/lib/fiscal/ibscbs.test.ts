@@ -215,7 +215,7 @@ describe("Simples Nacional (NT-009)", () => {
 
 describe("pendências do C5", () => {
   it("estão declaradas em código para não serem tratadas como resolvidas", () => {
-    expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(7);
+    expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(8);
     expect(PENDENCIAS_C5.join(" ")).toContain("164");
     expect(PENDENCIAS_C5.join(" ")).toContain("contador");
   });

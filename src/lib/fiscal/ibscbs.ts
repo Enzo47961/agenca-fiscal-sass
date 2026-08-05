@@ -59,8 +59,11 @@ export interface DefinicaoCst {
 
 export const TABELA_CST: readonly DefinicaoCst[] = [
   m("000", "Tributação integral", { exigeTributacao: true }),
-  m("010", "Alíquotas uniformes", { exigeTributacao: true }),
-  m("011", "Alíquotas uniformes reduzidas", { exigeTributacao: true, redAliquota: true }),
+  m("010", "Tributação com alíquotas uniformes", { exigeTributacao: true }),
+  m("011", "Tributação com alíquotas uniformes reduzidas", {
+    exigeTributacao: true,
+    redAliquota: true,
+  }),
   m("200", "Alíquota reduzida", { exigeTributacao: true, redAliquota: true }),
   m("220", "Alíquota fixa", { exigeTributacao: true }),
   m("221", "Alíquota fixa proporcional", { exigeTributacao: true }),
@@ -331,8 +334,14 @@ export function validarDeclaracao(
 // ---------------------------------------------------------------------------
 
 export const PENDENCIAS_C5 = [
-  "Importar os 164 cClassTrib oficiais para a tabela de domínio " +
-    "(cclasstrib_ibscbs). Sem eles, validarDeclaracao falha fechada.",
+  "Os 164 cClassTrib JÁ FORAM IMPORTADOS (migration de seed, conferidos " +
+    "164/164 por CST). Falta ainda um serviço que leia a tabela e injete " +
+    "`cClassTribConhecidos` em validarDeclaracao — hoje nenhum chamador passa " +
+    "esse conjunto, então a trava de existência do código está inativa.",
+  "As colunas de REDUÇÃO (perc_reducao_ibs/perc_reducao_cbs), os indicadores " +
+    "(trib. regular, crédito presumido, estorno) e o tipo de alíquota existem " +
+    "no portal oficial mas NÃO vieram no CSV exportado — ficaram NULL no seed. " +
+    "Sem elas não dá para derivar a redução a partir do cClassTrib.",
   "Construir o mapeamento negócio → CST/cClassTrib. O enum RegimeIbsCbs " +
     "(5 valores) não é suficiente para escolher entre 164 códigos, cada um " +
     "amarrado a um artigo da LC 214/2025. É decisão contábil, não técnica — " +
