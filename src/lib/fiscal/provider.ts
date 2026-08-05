@@ -4,6 +4,11 @@
  * e as duas classes de erro (regras 8 e 21 do CLAUDE.md).
  */
 import { type RegimeIbsCbs } from "./reforma";
+import {
+  type DeclaracaoTributariaIBSCBS,
+  type IntencaoRegimeTributario,
+  type ResultadoCalculoIBSCBS,
+} from "./ibscbs";
 
 // ---------------------------------------------------------------------------
 // Erros classificados — a distinção transiente/permanente dirige o retry
@@ -74,13 +79,32 @@ export interface EmitirNfseInput {
     competencia: string; // ISO date (yyyy-mm-dd)
     /** Código NBS (Nomenclatura Brasileira de Serviços) — reforma. Null no legado. */
     codigoNbs: string | null;
-    /** Tributos da reforma (CBS/IBS) já calculados. Zerados no modelo antigo. */
+    /**
+     * Tributos da reforma (CBS/IBS).
+     *
+     * ATENÇÃO À NATUREZA DOS CAMPOS (item C5 da auditoria): `regime` e os
+     * valores calculados são INTENÇÃO DE NEGÓCIO e prévia interna — servem para
+     * a UI e para relatório, e NÃO são o vocabulário que a DPS espera. Na NFS-e
+     * quem calcula o valor final de IBS/CBS é o Ambiente de Dados Nacional, a
+     * partir do CST/cClassTrib declarado; empurrar um valor já pronto pode
+     * divergir do que ele calcular. O que de fato se declara é `declaracao`.
+     */
     reforma: {
       regime: RegimeIbsCbs;
       cbsAliquota: number;
       ibsAliquota: number;
       cbsValorCentavos: number;
       ibsValorCentavos: number;
+      /**
+       * Grupo IBSCBS da DPS — CST, cClassTrib e subgrupos condicionais.
+       * Ausente/`null` enquanto o preenchimento do grupo não estiver
+       * habilitado: não há data confirmada de obrigatoriedade de PREENCHIMENTO
+       * para a NFS-e, e a NF-e teve as datas de produção suspensas na NT
+       * 2025.002 v1.51. Por isso é flag, não calendário.
+       */
+      declaracao?: DeclaracaoTributariaIBSCBS | null;
+      /** Contexto do Simples Nacional (opSimpNac / regApIBSCBSSN, NT-009). */
+      intencao?: IntencaoRegimeTributario | null;
     };
   };
 }
@@ -91,6 +115,12 @@ export interface EmitirNfseResult {
   providerId: string;
   urlPdf: string | null;
   urlXml: string | null;
+  /**
+   * Grupo IBSCBS CALCULADO pelo Ambiente de Dados Nacional e devolvido junto
+   * com a nota autorizada. É dado de auditoria: persistir, nunca recalcular
+   * localmente. Ausente enquanto o provider não expuser esses campos.
+   */
+  resultadoCalculado?: ResultadoCalculoIBSCBS | null;
 }
 
 export interface FiscalProvider {

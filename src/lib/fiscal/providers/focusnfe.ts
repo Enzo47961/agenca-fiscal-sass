@@ -6,6 +6,7 @@ import {
   type EmitirNfseResult,
   type FiscalProvider,
 } from "../provider";
+import { validarDeclaracao } from "../ibscbs";
 
 /**
  * Provider fiscal Focus NFe (regra 21 do CLAUDE.md).
@@ -373,18 +374,35 @@ export class FocusNfeProvider implements FiscalProvider {
   /**
    * Traduz o nosso `EmitirNfseInput` no JSON da Focus NFe.
    *
-   * PENDÊNCIA CONSCIENTE (item C5 da auditoria): a Focus já aceita os campos
-   * estruturados da reforma (`ibs_cbs_classificacao_tributaria` = cClassTrib,
-   * `codigo_indicador_operacao`). NÃO os enviamos ainda porque o sistema não
-   * modela CST/cClassTrib — o `regime_ibscbs` que temos é um agregado nosso,
-   * não um código da tabela oficial, e mapear um para o outro sem a NT
-   * 007/2026 lida na íntegra seria inventar enquadramento fiscal. Enquanto
-   * isso não for resolvido, esses campos ficam ausentes e a nota sai com o
-   * tratamento padrão do município. NÃO promover para produção sem fechar isso.
+   * GRUPO IBSCBS (item C5): quando `servico.reforma.declaracao` está
+   * preenchida, enviamos o `cClassTrib` no campo que a Focus documenta
+   * (`ibs_cbs_classificacao_tributaria`). Os 3 primeiros dígitos do cClassTrib
+   * SÃO o CST — a regra estrutural da tabela oficial —, então esse único campo
+   * carrega os dois códigos, e é por isso que não inventamos um nome de campo
+   * separado para o CST, que a documentação da Focus não expõe.
+   *
+   * Quando a declaração é `null`, nada da reforma é enviado e a nota sai com o
+   * tratamento padrão do município. É o estado normal hoje: não há data
+   * confirmada de obrigatoriedade de preenchimento do grupo na NFS-e.
    */
   private montarPayload(input: EmitirNfseInput): Record<string, unknown> {
     const { prestador, tomador, servico } = input;
     const ehCnpj = tomador.cpfCnpj.replace(/\D/g, "").length === 14;
+    const declaracao = servico.reforma.declaracao ?? null;
+
+    if (declaracao) {
+      // Falha fechada: CST/cClassTrib incoerentes são erro de enquadramento
+      // fiscal, não instabilidade. Retry não conserta — erro PERMANENTE
+      // (regra 8), e a nota nem chega a ser enviada à prefeitura.
+      const validacao = validarDeclaracao(declaracao);
+      if (!validacao.valido) {
+        throw new FiscalErrorPermanent(
+          `Grupo IBSCBS inválido: ${validacao.erros.join("; ")}`,
+          "ibscbs_invalido",
+          declaracao,
+        );
+      }
+    }
 
     return {
       data_emissao: `${servico.competencia}T00:00:00`,
@@ -407,6 +425,8 @@ export class FocusNfeProvider implements FiscalProvider {
         iss_retido: servico.issRetido,
         // Reforma: o NBS o sistema já tem e é aceito pela Focus.
         codigo_nbs: servico.codigoNbs ?? undefined,
+        // Grupo IBSCBS — só vai quando explicitamente declarado.
+        ibs_cbs_classificacao_tributaria: declaracao?.cClassTrib ?? undefined,
       },
     };
   }

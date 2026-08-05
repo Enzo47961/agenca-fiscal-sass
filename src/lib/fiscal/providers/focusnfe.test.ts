@@ -376,3 +376,77 @@ describe("ambiente", () => {
     expect(chamadas[0]!.url).toContain("https://api.focusnfe.com.br/");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Grupo IBSCBS (item C5)
+// ---------------------------------------------------------------------------
+
+describe("grupo IBSCBS no payload", () => {
+  it("sem declaração, nada da reforma vai no payload (estado normal hoje)", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(ENTRADA);
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    expect(servico.ibs_cbs_classificacao_tributaria).toBeUndefined();
+  });
+
+  it("com declaração válida, envia o cClassTrib no campo da Focus", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir({
+      ...ENTRADA,
+      servico: {
+        ...ENTRADA.servico,
+        reforma: {
+          ...ENTRADA.servico.reforma,
+          declaracao: { cst: "200", cClassTrib: "200027" },
+        },
+      },
+    });
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    // Os 3 primeiros dígitos do cClassTrib SÃO o CST — um campo carrega os dois.
+    expect(servico.ibs_cbs_classificacao_tributaria).toBe("200027");
+  });
+
+  it("declaração incoerente é erro PERMANENTE e a nota nem é enviada", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    const erro = await provider
+      .emitir({
+        ...ENTRADA,
+        servico: {
+          ...ENTRADA.servico,
+          reforma: {
+            ...ENTRADA.servico.reforma,
+            // cClassTrib não bate com o CST
+            declaracao: { cst: "200", cClassTrib: "000001" },
+          },
+        },
+      })
+      .catch((e: unknown) => e);
+
+    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
+    expect((erro as FiscalErrorPermanent).codigo).toBe("ibscbs_invalido");
+    // Nenhuma requisição saiu: falhou antes de tocar a prefeitura.
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("CST que exige diferimento sem o grupo é recusado antes do envio", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    const erro = await provider
+      .emitir({
+        ...ENTRADA,
+        servico: {
+          ...ENTRADA.servico,
+          reforma: {
+            ...ENTRADA.servico.reforma,
+            declaracao: { cst: "510", cClassTrib: "510001" },
+          },
+        },
+      })
+      .catch((e: unknown) => e);
+
+    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
+    expect((erro as FiscalErrorPermanent).message).toContain("diferimento");
+    expect(chamadas).toHaveLength(0);
+  });
+});
