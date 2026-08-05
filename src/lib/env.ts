@@ -25,6 +25,21 @@ const serverEnvSchema = z.object({
       message: "CERT_ENCRYPTION_KEY deve ser 32 bytes em base64 (openssl rand -base64 32)",
     }),
   MOCK_FISCAL_TAXA_FALHA: z.string().optional(),
+  /**
+   * Focus NFe (provider fiscal real). Opcional aqui porque só é exigido de
+   * quem tem `empresas.provider_fiscal = 'focusnfe'` — a obrigatoriedade é
+   * cobrada em `focusNfeEnv()`, abaixo. Token obtido no painel da Focus
+   * (Painel API → Tokens), por empresa. NUNCA hardcode (regra 4).
+   */
+  FOCUSNFE_TOKEN: z.string().min(1).optional(),
+  /** Padrão homologação de propósito: produção exige escolha explícita. */
+  FOCUSNFE_AMBIENTE: z.enum(["homologacao", "producao"]).default("homologacao"),
+  /**
+   * Opcional. Se definido, /api/webhook/focusnfe passa a exigir este valor no
+   * header `x-focusnfe-token`. A rota NÃO depende disso para ser segura: ela
+   * sempre reconsulta a API da Focus com o nosso token antes de gravar nada.
+   */
+  FOCUSNFE_WEBHOOK_TOKEN: z.string().min(16).optional(),
 });
 
 const publicEnvSchema = z.object({
@@ -37,6 +52,25 @@ const publicEnvSchema = z.object({
 /** Uso exclusivo em código server-side (route handlers, actions, Inngest). */
 export function serverEnv() {
   return serverEnvSchema.parse(process.env);
+}
+
+/**
+ * Config da Focus NFe, com a obrigatoriedade cobrada só aqui.
+ * Chamada exclusivamente pela factory `focusnfe` do registry de providers,
+ * então um tenant em `mock` nunca é afetado pela ausência do token.
+ */
+export function focusNfeEnv(): {
+  token: string;
+  ambiente: "homologacao" | "producao";
+} {
+  const env = serverEnv();
+  if (!env.FOCUSNFE_TOKEN) {
+    throw new Error(
+      "FOCUSNFE_TOKEN não configurado: a empresa está com provider_fiscal='focusnfe' " +
+        "mas o token da Focus NFe não está no ambiente. Configure-o antes de emitir.",
+    );
+  }
+  return { token: env.FOCUSNFE_TOKEN, ambiente: env.FOCUSNFE_AMBIENTE };
 }
 
 /** Seguro em qualquer lugar — apenas valores públicos. */
