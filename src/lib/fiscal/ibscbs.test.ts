@@ -6,6 +6,7 @@ import {
   REG_AP_IBSCBS_SN,
   TABELA_CST,
   TOTAL_CCLASSTRIB_ESPERADO,
+  TOTAL_CCLASSTRIB_NFSE,
   aliquotaEfetiva,
   buscarCst,
   declaracaoIbsCbsSchema,
@@ -58,6 +59,13 @@ describe("tabela CST-IBS/CBS", () => {
     const soma = Object.values(CCLASSTRIB_ESPERADOS_POR_CST).reduce((a, b) => a + b, 0);
     expect(soma).toBe(TOTAL_CCLASSTRIB_ESPERADO);
     expect(soma).toBe(164);
+  });
+
+  it("só uma fração dos 164 códigos vale para NFS-e", () => {
+    // 71 de 164 — o resto é exclusivo de NF-e, CT-e, NFCom etc. Declarar um
+    // código de outro documento numa NFS-e é rejeição certa.
+    expect(TOTAL_CCLASSTRIB_NFSE).toBe(71);
+    expect(TOTAL_CCLASSTRIB_NFSE).toBeLessThan(TOTAL_CCLASSTRIB_ESPERADO);
   });
 
   it("todo CST da tabela tem contagem de cClassTrib, e vice-versa", () => {

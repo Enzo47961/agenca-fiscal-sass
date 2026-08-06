@@ -124,6 +124,14 @@ export const CCLASSTRIB_ESPERADOS_POR_CST: Readonly<Record<string, number>> = {
 
 export const TOTAL_CCLASSTRIB_ESPERADO = 164;
 
+/**
+ * Dos 164 códigos, só 71 são aceitos em NFS-e — o portal informa, por código,
+ * quais documentos fiscais o admitem. Declarar numa NFS-e um código exclusivo
+ * de NF-e é rejeição certa. A migration de complemento grava isso na coluna
+ * `aplica_nfse`, e a view `cclasstrib_nfse` já vem filtrada.
+ */
+export const TOTAL_CCLASSTRIB_NFSE = 71;
+
 // ---------------------------------------------------------------------------
 // Simples Nacional — NT-009
 //
@@ -338,10 +346,12 @@ export const PENDENCIAS_C5 = [
     "164/164 por CST). Falta ainda um serviço que leia a tabela e injete " +
     "`cClassTribConhecidos` em validarDeclaracao — hoje nenhum chamador passa " +
     "esse conjunto, então a trava de existência do código está inativa.",
-  "As colunas de REDUÇÃO (perc_reducao_ibs/perc_reducao_cbs), os indicadores " +
-    "(trib. regular, crédito presumido, estorno) e o tipo de alíquota existem " +
-    "no portal oficial mas NÃO vieram no CSV exportado — ficaram NULL no seed. " +
-    "Sem elas não dá para derivar a redução a partir do cClassTrib.",
+  "As colunas de redução, os indicadores e o tipo de alíquota JÁ FORAM " +
+    "PREENCHIDOS (migration de complemento). Falta usar `perc_reducao_ibs`/" +
+    "`perc_reducao_cbs` no cálculo: hoje a redução ainda vem do enum " +
+    "RegimeIbsCbs, não do cClassTrib declarado — os dois podem divergir.",
+  "Só 71 dos 164 cClassTrib valem para NFS-e (coluna aplica_nfse). Nada no " +
+    "código impede declarar um código exclusivo de NF-e numa NFS-e ainda.",
   "Construir o mapeamento negócio → CST/cClassTrib. O enum RegimeIbsCbs " +
     "(5 valores) não é suficiente para escolher entre 164 códigos, cada um " +
     "amarrado a um artigo da LC 214/2025. É decisão contábil, não técnica — " +
