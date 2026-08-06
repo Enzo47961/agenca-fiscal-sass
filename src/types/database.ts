@@ -7,11 +7,6 @@
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -101,6 +96,98 @@ export type Database = {
           },
         ]
       }
+      cclasstrib_ibscbs: {
+        Row: {
+          aplica_nfse: boolean
+          artigo_lc214: string | null
+          codigo: string
+          created_at: string
+          cst: string
+          descricao: string
+          ind_cred_pres: boolean
+          ind_estorno_cred: boolean
+          ind_perc_biocombustivel: boolean
+          ind_trib_regular: boolean
+          perc_reducao_cbs: number | null
+          perc_reducao_ibs: number | null
+          rb_sn: number | null
+          tipo_aliquota: number | null
+          url_dispositivo: string | null
+          vigencia_fim: string | null
+          vigencia_inicio: string | null
+        }
+        Insert: {
+          aplica_nfse?: boolean
+          artigo_lc214?: string | null
+          codigo: string
+          created_at?: string
+          cst: string
+          descricao: string
+          ind_cred_pres?: boolean
+          ind_estorno_cred?: boolean
+          ind_perc_biocombustivel?: boolean
+          ind_trib_regular?: boolean
+          perc_reducao_cbs?: number | null
+          perc_reducao_ibs?: number | null
+          rb_sn?: number | null
+          tipo_aliquota?: number | null
+          url_dispositivo?: string | null
+          vigencia_fim?: string | null
+          vigencia_inicio?: string | null
+        }
+        Update: {
+          aplica_nfse?: boolean
+          artigo_lc214?: string | null
+          codigo?: string
+          created_at?: string
+          cst?: string
+          descricao?: string
+          ind_cred_pres?: boolean
+          ind_estorno_cred?: boolean
+          ind_perc_biocombustivel?: boolean
+          ind_trib_regular?: boolean
+          perc_reducao_cbs?: number | null
+          perc_reducao_ibs?: number | null
+          rb_sn?: number | null
+          tipo_aliquota?: number | null
+          url_dispositivo?: string | null
+          vigencia_fim?: string | null
+          vigencia_inicio?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cclasstrib_ibscbs_cst_fkey"
+            columns: ["cst"]
+            isOneToOne: false
+            referencedRelation: "cst_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+        ]
+      }
+      ccredpres_ibscbs: {
+        Row: {
+          codigo: string
+          created_at: string
+          descricao: string
+          vigencia_fim_bruto: string | null
+          vigencia_inicio_bruto: string | null
+        }
+        Insert: {
+          codigo: string
+          created_at?: string
+          descricao: string
+          vigencia_fim_bruto?: string | null
+          vigencia_inicio_bruto?: string | null
+        }
+        Update: {
+          codigo?: string
+          created_at?: string
+          descricao?: string
+          vigencia_fim_bruto?: string | null
+          vigencia_inicio_bruto?: string | null
+        }
+        Relationships: []
+      }
       clientes: {
         Row: {
           ativo: boolean
@@ -148,6 +235,48 @@ export type Database = {
           },
         ]
       }
+      cst_ibscbs: {
+        Row: {
+          ajuste_competencia: boolean
+          codigo: string
+          created_at: string
+          cred_pres_zfm: boolean
+          descricao: string
+          diferimento: boolean
+          exige_tributacao: boolean
+          monofasica: boolean
+          red_aliquota: boolean
+          red_base_calculo: boolean
+          transf_credito: boolean
+        }
+        Insert: {
+          ajuste_competencia?: boolean
+          codigo: string
+          created_at?: string
+          cred_pres_zfm?: boolean
+          descricao: string
+          diferimento?: boolean
+          exige_tributacao?: boolean
+          monofasica?: boolean
+          red_aliquota?: boolean
+          red_base_calculo?: boolean
+          transf_credito?: boolean
+        }
+        Update: {
+          ajuste_competencia?: boolean
+          codigo?: string
+          created_at?: string
+          cred_pres_zfm?: boolean
+          descricao?: string
+          diferimento?: boolean
+          exige_tributacao?: boolean
+          monofasica?: boolean
+          red_aliquota?: boolean
+          red_base_calculo?: boolean
+          transf_credito?: boolean
+        }
+        Relationships: []
+      }
       empresa_membros: {
         Row: {
           created_at: string
@@ -179,6 +308,7 @@ export type Database = {
       }
       empresas: {
         Row: {
+          cnae: string | null
           cnpj: string
           codigo_municipio_ibge: string
           created_at: string
@@ -186,7 +316,6 @@ export type Database = {
           id: string
           inscricao_municipal: string | null
           nome_fantasia: string | null
-          cnae: string | null
           provider_fiscal: string
           razao_social: string
           regime_tributario: string
@@ -194,6 +323,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          cnae?: string | null
           cnpj: string
           codigo_municipio_ibge: string
           created_at?: string
@@ -204,9 +334,11 @@ export type Database = {
           provider_fiscal?: string
           razao_social: string
           regime_tributario?: string
+          simples_por_fora?: boolean
           updated_at?: string
         }
         Update: {
+          cnae?: string | null
           cnpj?: string
           codigo_municipio_ibge?: string
           created_at?: string
@@ -214,7 +346,6 @@ export type Database = {
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
-          cnae?: string | null
           provider_fiscal?: string
           razao_social?: string
           regime_tributario?: string
@@ -279,7 +410,10 @@ export type Database = {
       notas_fiscais: {
         Row: {
           aliquota_iss: number
+          cbs_aliquota: number
+          cbs_valor_centavos: number
           cliente_id: string
+          codigo_nbs: string | null
           codigo_servico: string
           codigo_verificacao: string | null
           competencia: string
@@ -290,6 +424,8 @@ export type Database = {
           excedente: boolean
           falha_definitiva_em: string | null
           fatura_excedente_id: string | null
+          ibs_aliquota: number
+          ibs_valor_centavos: number
           id: string
           iss_retido: boolean
           max_tentativas: number
@@ -297,6 +433,8 @@ export type Database = {
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
+          regime_ibscbs: string
+          split_retido_centavos: number | null
           status: Database["public"]["Enums"]["nota_status"]
           tentativas: number
           ultimo_erro: string | null
@@ -304,19 +442,15 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
-          cbs_aliquota: number
-          cbs_valor_centavos: number
-          codigo_nbs: string | null
-          ibs_aliquota: number
-          ibs_valor_centavos: number
-          regime_ibscbs: string
-          split_retido_centavos: number | null
           valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
         Insert: {
           aliquota_iss?: number
+          cbs_aliquota?: number
+          cbs_valor_centavos?: number
           cliente_id: string
+          codigo_nbs?: string | null
           codigo_servico: string
           codigo_verificacao?: string | null
           competencia?: string
@@ -327,6 +461,8 @@ export type Database = {
           excedente?: boolean
           falha_definitiva_em?: string | null
           fatura_excedente_id?: string | null
+          ibs_aliquota?: number
+          ibs_valor_centavos?: number
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -334,6 +470,8 @@ export type Database = {
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
+          regime_ibscbs?: string
+          split_retido_centavos?: number | null
           status?: Database["public"]["Enums"]["nota_status"]
           tentativas?: number
           ultimo_erro?: string | null
@@ -341,19 +479,15 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
-          cbs_aliquota?: number
-          cbs_valor_centavos?: number
-          codigo_nbs?: string | null
-          ibs_aliquota?: number
-          ibs_valor_centavos?: number
-          regime_ibscbs?: string
-          split_retido_centavos?: number | null
           valor_liquido_centavos?: number | null
           valor_servico_centavos: number
         }
         Update: {
           aliquota_iss?: number
+          cbs_aliquota?: number
+          cbs_valor_centavos?: number
           cliente_id?: string
+          codigo_nbs?: string | null
           codigo_servico?: string
           codigo_verificacao?: string | null
           competencia?: string
@@ -364,6 +498,8 @@ export type Database = {
           excedente?: boolean
           falha_definitiva_em?: string | null
           fatura_excedente_id?: string | null
+          ibs_aliquota?: number
+          ibs_valor_centavos?: number
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -371,6 +507,8 @@ export type Database = {
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
+          regime_ibscbs?: string
+          split_retido_centavos?: number | null
           status?: Database["public"]["Enums"]["nota_status"]
           tentativas?: number
           ultimo_erro?: string | null
@@ -378,24 +516,10 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
-          cbs_aliquota?: number
-          cbs_valor_centavos?: number
-          codigo_nbs?: string | null
-          ibs_aliquota?: number
-          ibs_valor_centavos?: number
-          regime_ibscbs?: string
-          split_retido_centavos?: number | null
           valor_liquido_centavos?: number | null
           valor_servico_centavos?: number
         }
         Relationships: [
-          {
-            foreignKeyName: "notas_fiscais_fatura_excedente_id_fkey"
-            columns: ["fatura_excedente_id"]
-            isOneToOne: false
-            referencedRelation: "faturas_excedente"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "notas_fiscais_cliente_id_fkey"
             columns: ["cliente_id"]
@@ -408,6 +532,13 @@ export type Database = {
             columns: ["empresa_id"]
             isOneToOne: false
             referencedRelation: "empresas"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_fatura_excedente_id_fkey"
+            columns: ["fatura_excedente_id"]
+            isOneToOne: false
+            referencedRelation: "faturas_excedente"
             referencedColumns: ["id"]
           },
         ]
@@ -468,7 +599,68 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      cclasstrib_conferencia: {
+        Row: {
+          confere: boolean | null
+          cst: string | null
+          esperado: number | null
+          importado: number | null
+        }
+        Relationships: []
+      }
+      cclasstrib_nfse: {
+        Row: {
+          artigo_lc214: string | null
+          codigo: string | null
+          cst: string | null
+          descricao: string | null
+          ind_cred_pres: boolean | null
+          ind_estorno_cred: boolean | null
+          ind_trib_regular: boolean | null
+          perc_reducao_cbs: number | null
+          perc_reducao_ibs: number | null
+          rb_sn: number | null
+          tipo_aliquota: number | null
+          url_dispositivo: string | null
+        }
+        Insert: {
+          artigo_lc214?: string | null
+          codigo?: string | null
+          cst?: string | null
+          descricao?: string | null
+          ind_cred_pres?: boolean | null
+          ind_estorno_cred?: boolean | null
+          ind_trib_regular?: boolean | null
+          perc_reducao_cbs?: number | null
+          perc_reducao_ibs?: number | null
+          rb_sn?: number | null
+          tipo_aliquota?: number | null
+          url_dispositivo?: string | null
+        }
+        Update: {
+          artigo_lc214?: string | null
+          codigo?: string | null
+          cst?: string | null
+          descricao?: string | null
+          ind_cred_pres?: boolean | null
+          ind_estorno_cred?: boolean | null
+          ind_trib_regular?: boolean | null
+          perc_reducao_cbs?: number | null
+          perc_reducao_ibs?: number | null
+          rb_sn?: number | null
+          tipo_aliquota?: number | null
+          url_dispositivo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cclasstrib_ibscbs_cst_fkey"
+            columns: ["cst"]
+            isOneToOne: false
+            referencedRelation: "cst_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+        ]
+      }
     }
     Functions: {
       criar_minha_empresa: {
@@ -484,10 +676,7 @@ export type Database = {
         Returns: string
       }
       empresas_do_usuario: { Args: never; Returns: string[] }
-      marcar_nota_excedente: {
-        Args: { p_nota_id: string }
-        Returns: boolean
-      }
+      marcar_nota_excedente: { Args: { p_nota_id: string }; Returns: boolean }
       transicionar_status_nota: {
         Args: {
           p_erro_codigo?: string
@@ -497,7 +686,10 @@ export type Database = {
         }
         Returns: {
           aliquota_iss: number
+          cbs_aliquota: number
+          cbs_valor_centavos: number
           cliente_id: string
+          codigo_nbs: string | null
           codigo_servico: string
           codigo_verificacao: string | null
           competencia: string
@@ -508,6 +700,8 @@ export type Database = {
           excedente: boolean
           falha_definitiva_em: string | null
           fatura_excedente_id: string | null
+          ibs_aliquota: number
+          ibs_valor_centavos: number
           id: string
           iss_retido: boolean
           max_tentativas: number
@@ -515,6 +709,8 @@ export type Database = {
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
+          regime_ibscbs: string
+          split_retido_centavos: number | null
           status: Database["public"]["Enums"]["nota_status"]
           tentativas: number
           ultimo_erro: string | null
@@ -522,13 +718,6 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
-          cbs_aliquota: number
-          cbs_valor_centavos: number
-          codigo_nbs: string | null
-          ibs_aliquota: number
-          ibs_valor_centavos: number
-          regime_ibscbs: string
-          split_retido_centavos: number | null
           valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
@@ -684,3 +873,4 @@ export const Constants = {
     },
   },
 } as const
+
