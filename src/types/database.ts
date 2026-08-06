@@ -426,6 +426,15 @@ export type Database = {
           fatura_excedente_id: string | null
           ibs_aliquota: number
           ibs_valor_centavos: number
+          ibscbs_cclasstrib: string | null
+          ibscbs_cclasstrib_vale_nfse: boolean | null
+          ibscbs_ccredpres: string | null
+          ibscbs_cst: string | null
+          ibscbs_dif_perc_cbs: number | null
+          ibscbs_dif_perc_mun: number | null
+          ibscbs_dif_perc_uf: number | null
+          ibscbs_trib_reg_cclasstrib: string | null
+          ibscbs_trib_reg_cst: string | null
           id: string
           iss_retido: boolean
           max_tentativas: number
@@ -463,6 +472,15 @@ export type Database = {
           fatura_excedente_id?: string | null
           ibs_aliquota?: number
           ibs_valor_centavos?: number
+          ibscbs_cclasstrib?: string | null
+          ibscbs_cclasstrib_vale_nfse?: boolean | null
+          ibscbs_ccredpres?: string | null
+          ibscbs_cst?: string | null
+          ibscbs_dif_perc_cbs?: number | null
+          ibscbs_dif_perc_mun?: number | null
+          ibscbs_dif_perc_uf?: number | null
+          ibscbs_trib_reg_cclasstrib?: string | null
+          ibscbs_trib_reg_cst?: string | null
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -500,6 +518,15 @@ export type Database = {
           fatura_excedente_id?: string | null
           ibs_aliquota?: number
           ibs_valor_centavos?: number
+          ibscbs_cclasstrib?: string | null
+          ibscbs_cclasstrib_vale_nfse?: boolean | null
+          ibscbs_ccredpres?: string | null
+          ibscbs_cst?: string | null
+          ibscbs_dif_perc_cbs?: number | null
+          ibscbs_dif_perc_mun?: number | null
+          ibscbs_dif_perc_uf?: number | null
+          ibscbs_trib_reg_cclasstrib?: string | null
+          ibscbs_trib_reg_cst?: string | null
           id?: string
           iss_retido?: boolean
           max_tentativas?: number
@@ -521,6 +548,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "fk_notas_cclasstrib_nfse"
+            columns: ["ibscbs_cclasstrib", "ibscbs_cclasstrib_vale_nfse"]
+            isOneToOne: false
+            referencedRelation: "cclasstrib_ibscbs"
+            referencedColumns: ["codigo", "aplica_nfse"]
+          },
+          {
             foreignKeyName: "notas_fiscais_cliente_id_fkey"
             columns: ["cliente_id"]
             isOneToOne: false
@@ -540,6 +574,41 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "faturas_excedente"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_ibscbs_ccredpres_fkey"
+            columns: ["ibscbs_ccredpres"]
+            isOneToOne: false
+            referencedRelation: "ccredpres_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_ibscbs_cst_fkey"
+            columns: ["ibscbs_cst"]
+            isOneToOne: false
+            referencedRelation: "cst_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cclasstrib_fkey"
+            columns: ["ibscbs_trib_reg_cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "cclasstrib_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cclasstrib_fkey"
+            columns: ["ibscbs_trib_reg_cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "cclasstrib_nfse"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cst_fkey"
+            columns: ["ibscbs_trib_reg_cst"]
+            isOneToOne: false
+            referencedRelation: "cst_ibscbs"
+            referencedColumns: ["codigo"]
           },
         ]
       }
@@ -702,6 +771,15 @@ export type Database = {
           fatura_excedente_id: string | null
           ibs_aliquota: number
           ibs_valor_centavos: number
+          ibscbs_cclasstrib: string | null
+          ibscbs_cclasstrib_vale_nfse: boolean | null
+          ibscbs_ccredpres: string | null
+          ibscbs_cst: string | null
+          ibscbs_dif_perc_cbs: number | null
+          ibscbs_dif_perc_mun: number | null
+          ibscbs_dif_perc_uf: number | null
+          ibscbs_trib_reg_cclasstrib: string | null
+          ibscbs_trib_reg_cst: string | null
           id: string
           iss_retido: boolean
           max_tentativas: number

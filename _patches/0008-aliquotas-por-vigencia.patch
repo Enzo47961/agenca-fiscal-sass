@@ -1,0 +1,360 @@
+From c08cd0fe381ae4ef36951a0e87f0184a36493cf6 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Thu, 6 Aug 2026 16:55:19 +0000
+Subject: [PATCH] fix(fiscal): aliquotas de IBS/CBS por vigencia, com falha
+ explicita (C6)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fecha o item C6, aberto desde a primeira auditoria. `aliquotasReferencia()`
+recebia a competencia, validava que era um ano, IGNORAVA o valor e devolvia
+sempre o par de teste de 2026. Uma nota com competencia 2027 saia com CBS
+0,9% — subdeclaracao silenciosa justamente quando a cobranca deixa de ser
+informativa. O parametro na assinatura dava a aparencia de que a vigencia era
+tratada.
+
+Fonte: EC 132/2023 (ADCT arts. 125-129), LC 214/2025 art. 18, e a pesquisa
+oficial de 05/08/2026 (Entrega 6).
+
+O QUE A NORMA REALMENTE FIXA, E O QUE NAO FIXA:
+- 2026: CBS 0,9% e IBS 0,1%, valores fixos no texto constitucional.
+- 2027-2028: IBS FIXO em 0,05% estadual + 0,05% municipal. CBS = aliquota de
+  referencia menos 0,1 p.p., e a referencia depende de Resolucao do Senado
+  que NAO FOI PUBLICADA. Metade conhecida, metade nao.
+- 2029-2033: nenhuma das duas fixada.
+
+Existe uma proposta INTERNA do Comite Gestor (Resolucao CGIBS 14, de
+29/07/2026, estimando IBS em 18,7% e o total em ~27,91%). Nao e a fixacao
+legal exigida pela lei e NAO entrou na tabela — usar como parametro de calculo
+seria transformar estimativa em tributo declarado.
+
+Comportamento novo: ano sem aliquota fixada LANCA AliquotaNaoFixadaError, com
+o tributo faltante e o fundamento legal na mensagem, em vez de devolver um
+numero plausivel. Emitir com aliquota inventada e pior que nao emitir — vira
+subdeclaracao com aparencia de conformidade. A classe de erro e propria para
+que o chamador distinga "norma nao publicada" de bug nosso.
+
+Destrave sem deploy: `overrides` por ano, e so o valor faltante precisa ser
+informado (em 2027 o IBS continua vindo da norma). Assim que a Resolucao do
+Senado sair, e configuracao, nao codigo.
+
+ATENCAO OPERACIONAL, registrada em PENDENCIAS_C5: isso significa que a emissao
+PARA em 01/01/2027 se ninguem configurar a aliquota publicada. E deliberado —
+falha fechada —, mas e uma data real no calendario, nao um TODO.
+
+9 testes novos (160 no total, eram 151): 2027/2028 falham por CBS e apontam o
+Senado; 2029-2033 falham por ambos; 2025 e 2034 nao caem em default nenhum;
+override destrava e nao vaza entre anos; o erro se propaga por
+calcularTributosReforma em vez de calcular errado; e o regime diferenciado
+continua sendo aplicado sobre a aliquota do override.
+
+DoD: typecheck OK, lint OK, test OK (160), build OK.
+---
+ src/lib/fiscal/ibscbs.ts       |   4 +
+ src/lib/fiscal/reforma.test.ts |  91 +++++++++++++++++++++
+ src/lib/fiscal/reforma.ts      | 140 ++++++++++++++++++++++++++++++---
+ 3 files changed, 222 insertions(+), 13 deletions(-)
+
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+index fd3521b..a9b8739 100644
+--- a/src/lib/fiscal/ibscbs.ts
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -362,6 +362,10 @@ export const PENDENCIAS_C5 = [
+     "grupo IBSCBS) antes de montar o payload com esses campos.",
+   "Confirmar se a fórmula de base de cálculo da NT-009 substitui ou coexiste " +
+     "com a da NT-004.",
++  "As alíquotas de 2027+ NÃO estão fixadas por Resolução do Senado. " +
++    "aliquotasReferencia() agora lança AliquotaNaoFixadaError nesses anos, em " +
++    "vez de devolver o par de teste de 2026 — mas isso significa que a emissão " +
++    "PARA a partir de 01/01/2027 até alguém configurar o valor publicado.",
+   "Não há data confirmada de obrigatoriedade do PREENCHIMENTO do grupo IBSCBS " +
+     "na NFS-e — o Ato Conjunto 4/2026 rege a obrigatoriedade de EMISSÃO do " +
+     "documento. A NF-e teve as datas de produção suspensas na NT 2025.002 " +
+diff --git a/src/lib/fiscal/reforma.test.ts b/src/lib/fiscal/reforma.test.ts
+index 615aa94..ed355c4 100644
+--- a/src/lib/fiscal/reforma.test.ts
++++ b/src/lib/fiscal/reforma.test.ts
+@@ -1,7 +1,9 @@
+ import { describe, it, expect } from "vitest";
+ import {
++  AliquotaNaoFixadaError,
+   calcularTributosReforma,
+   aliquotasReferencia,
++  competenciasComAliquotaFixada,
+   REGIME_IBSCBS,
+   REGIME_IBSCBS_LABEL,
+ } from "@/lib/fiscal/reforma";
+@@ -18,6 +20,95 @@ describe("aliquotasReferencia", () => {
+   it("rejeita competência inválida", () => {
+     expect(() => aliquotasReferencia("abril")).toThrow();
+   });
++
++  // O núcleo do C6: antes, QUALQUER ano devolvia o par de teste de 2026.
++  // Uma nota de 2027 saía com CBS 0,9% — subdeclaração silenciosa justamente
++  // quando a cobrança deixa de ser informativa.
++  it("2027 e 2028 têm IBS fixo, mas a CBS ainda não foi fixada pelo Senado", () => {
++    for (const ano of ["2027", "2028"]) {
++      const erro = (() => {
++        try {
++          aliquotasReferencia(`${ano}-03-01`);
++          return null;
++        } catch (e) {
++          return e;
++        }
++      })();
++      expect(erro).toBeInstanceOf(AliquotaNaoFixadaError);
++      expect((erro as AliquotaNaoFixadaError).tributo).toBe("cbs");
++      expect((erro as AliquotaNaoFixadaError).ano).toBe(Number(ano));
++      expect((erro as AliquotaNaoFixadaError).message).toContain("Senado");
++    }
++  });
++
++  it("de 2029 a 2033 nenhuma das duas está fixada", () => {
++    for (const ano of [2029, 2030, 2031, 2032, 2033]) {
++      const erro = (() => {
++        try {
++          aliquotasReferencia(`${ano}-01-01`);
++          return null;
++        } catch (e) {
++          return e;
++        }
++      })();
++      expect(erro).toBeInstanceOf(AliquotaNaoFixadaError);
++      expect((erro as AliquotaNaoFixadaError).tributo).toBe("ambos");
++    }
++  });
++
++  it("anos fora da transição não caem em default nenhum", () => {
++    expect(() => aliquotasReferencia("2025-12-31")).toThrow(AliquotaNaoFixadaError);
++    expect(() => aliquotasReferencia("2034-01-01")).toThrow(AliquotaNaoFixadaError);
++  });
++
++  // O caminho de destrave quando a Resolução do Senado sair — sem deploy.
++  it("override destrava o ano, e só o valor faltante precisa ser informado", () => {
++    expect(aliquotasReferencia("2027-06-01", { 2027: { cbs: 0.0875 } })).toEqual({
++      cbs: 0.0875,
++      ibs: 0.001, // continua vindo da norma, que fixou o IBS
++    });
++  });
++
++  it("override de um ano não vaza para os outros", () => {
++    expect(() => aliquotasReferencia("2028-01-01", { 2027: { cbs: 0.0875 } })).toThrow(
++      AliquotaNaoFixadaError,
++    );
++  });
++
++  it("só 2026 está integralmente fixada hoje", () => {
++    expect(competenciasComAliquotaFixada()).toEqual([2026]);
++  });
++});
++
++describe("calcularTributosReforma com vigência", () => {
++  it("propaga o erro de alíquota não fixada em vez de calcular errado", () => {
++    expect(() =>
++      calcularTributosReforma({ baseCentavos: BASE, competencia: "2027-01-01", regime: "padrao" }),
++    ).toThrow(AliquotaNaoFixadaError);
++  });
++
++  it("calcula normalmente quando o override supre o que falta", () => {
++    const t = calcularTributosReforma({
++      baseCentavos: BASE,
++      competencia: "2027-01-01",
++      regime: "padrao",
++      overridesAliquotas: { 2027: { cbs: 0.0875 } },
++    });
++    expect(t.cbsAliquota).toBe(0.0875);
++    expect(t.cbsValorCentavos).toBe(8750); // 8,75% de R$1.000
++    expect(t.ibsAliquota).toBe(0.001);
++  });
++
++  it("regime diferenciado continua sendo aplicado sobre a alíquota do override", () => {
++    const t = calcularTributosReforma({
++      baseCentavos: BASE,
++      competencia: "2027-01-01",
++      regime: "reducao_60",
++      overridesAliquotas: { 2027: { cbs: 0.1 } },
++    });
++    // fator 0.4 = redução de 60%
++    expect(t.cbsAliquota).toBe(0.04);
++  });
+ });
+ 
+ describe("calcularTributosReforma", () => {
+diff --git a/src/lib/fiscal/reforma.ts b/src/lib/fiscal/reforma.ts
+index 1a8261a..870a238 100644
+--- a/src/lib/fiscal/reforma.ts
++++ b/src/lib/fiscal/reforma.ts
+@@ -9,10 +9,10 @@ import { type Centavos } from "@/types/domain";
+  * de carga. Setores sensíveis têm regime diferenciado (alíquota zero, redução de
+  * 60% ou 30%, ou regime específico).
+  *
+- * ATENÇÃO: os percentuais aqui são a fase de teste 2026 e as reduções previstas.
+- * Os números da transição (2027+) dependem de regulamentação ainda em curso —
+- * confirme com um contador antes de usar em produção. Tudo centralizado aqui
+- * para ser fácil de ajustar num lugar só.
++ * ALÍQUOTAS POR VIGÊNCIA (item C6): a tabela VIGENCIAS abaixo é a fonte única.
++ * Anos cuja alíquota a norma ainda não fixou LANÇAM erro em vez de devolver um
++ * número plausível — ver aliquotasReferencia(). Confirme com um contador antes
++ * de usar em produção.
+  */
+ 
+ export const REGIME_IBSCBS = [
+@@ -48,18 +48,130 @@ const FATOR_REGIME: Record<RegimeIbsCbs, number> = {
+ };
+ 
+ /**
+- * Alíquotas de referência (fração) por competência. Hoje só a fase de teste
+- * 2026 está fixada; anos seguintes caem no mesmo default seguro até serem
+- * configurados com base na regulamentação.
++ * Erro específico para "a lei ainda não fixou essa alíquota".
++ *
++ * Existe como classe própria de propósito: quem chama precisa distinguir isto
++ * de um erro de programação. Não é bug nosso — é norma que não foi publicada.
+  */
+-export function aliquotasReferencia(competencia: string): { cbs: number; ibs: number } {
++export class AliquotaNaoFixadaError extends Error {
++  readonly kind = "aliquota_nao_fixada" as const;
++  constructor(
++    message: string,
++    readonly ano: number,
++    readonly tributo: "cbs" | "ibs" | "ambos",
++  ) {
++    super(message);
++    this.name = "AliquotaNaoFixadaError";
++  }
++}
++
++/** `null` = não fixado por norma até a data desta implementação (05/08/2026). */
++interface VigenciaAliquota {
++  readonly cbs: number | null;
++  readonly ibs: number | null;
++  readonly fundamento: string;
++}
++
++/**
++ * TABELA DE VIGÊNCIA DAS ALÍQUOTAS DE REFERÊNCIA (item C6 da auditoria).
++ *
++ * Fonte: EC 132/2023 (ADCT arts. 125-129), LC 214/2025 art. 18, e a pesquisa
++ * oficial de 05/08/2026 (`relatorio_pesquisa_oficial_ibscbs.md`, Entrega 6).
++ *
++ * O PONTO CENTRAL: até 05/08/2026 **nenhuma alíquota de referência de 2027 em
++ * diante foi fixada por Resolução do Senado Federal**, que é o instrumento que
++ * a lei exige (ADCT art. 130; LC 214/2025 art. 18). Existe apenas uma proposta
++ * INTERNA do Comitê Gestor (Resolução CGIBS nº 14, de 29/07/2026, estimando IBS
++ * em 18,7% e o total em ~27,91%) — não é a fixação legal e NÃO deve ser usada
++ * como parâmetro de cálculo. Por isso ela não está nesta tabela.
++ *
++ * Antes, esta função recebia a competência, ignorava o ano e devolvia sempre o
++ * par de teste de 2026. Uma nota de 2027 sairia com CBS 0,9% — subdeclaração
++ * silenciosa, justamente quando a cobrança deixa de ser informativa.
++ */
++const VIGENCIAS: Readonly<Record<number, VigenciaAliquota>> = {
++  // Fase de teste: valores fixos no texto constitucional, confirmados
++  // literalmente. Apuração informativa, compensável com PIS/Cofins.
++  2026: { cbs: 0.009, ibs: 0.001, fundamento: "ADCT art. 125 (EC 132/2023)" },
++
++  // IBS é fixo por norma: 0,05% estadual + 0,05% municipal = 0,1%.
++  // CBS = alíquota de referência − 0,1 p.p., e a referência depende de
++  // Resolução do Senado ainda não publicada. Metade conhecida, metade não.
++  2027: { cbs: null, ibs: 0.001, fundamento: "ADCT arts. 126-127; CBS pendente do Senado" },
++  2028: { cbs: null, ibs: 0.001, fundamento: "ADCT art. 127; CBS pendente do Senado" },
++
++  // A partir daqui, ICMS/ISS reduzem progressivamente (9/10, 8/10, 7/10, 6/10)
++  // e as alíquotas de referência de CBS e IBS passam a valer — nenhuma fixada.
++  2029: { cbs: null, ibs: null, fundamento: "ADCT art. 128-I; referências pendentes" },
++  2030: { cbs: null, ibs: null, fundamento: "ADCT art. 128-II; referências pendentes" },
++  2031: { cbs: null, ibs: null, fundamento: "ADCT art. 128-III; referências pendentes" },
++  2032: { cbs: null, ibs: null, fundamento: "ADCT art. 128-IV; referências pendentes" },
++  2033: { cbs: null, ibs: null, fundamento: "ADCT art. 129 (ICMS/ISS extintos); pendentes" },
++};
++
++/** Override para quando o Senado publicar: `{ 2027: { cbs: 0.0875 } }`. */
++export type OverridesAliquotas = Readonly<
++  Record<number, { cbs?: number; ibs?: number } | undefined>
++>;
++
++/**
++ * Alíquotas de referência (fração) da competência informada.
++ *
++ * LANÇA `AliquotaNaoFixadaError` quando a norma ainda não fixou o valor, em vez
++ * de devolver um número plausível. Emitir com alíquota inventada é pior do que
++ * não emitir: vira subdeclaração com aparência de conformidade.
++ *
++ * `overrides` é o caminho para destravar sem deploy assim que a Resolução do
++ * Senado sair — passe o valor publicado, com fundamento registrado.
++ */
++export function aliquotasReferencia(
++  competencia: string,
++  overrides: OverridesAliquotas = {},
++): { cbs: number; ibs: number } {
+   const ano = Number(competencia.slice(0, 4));
+-  if (!Number.isFinite(ano)) {
++  if (!Number.isInteger(ano) || ano < 1000) {
+     throw new Error(`Competência inválida: ${competencia}`);
+   }
+-  // Fase de teste (2026): CBS 0,9% e IBS 0,1%, sem aumento real de carga.
+-  // 2027+ entra a transição — números reais a confirmar; mantém o default.
+-  return { cbs: 0.009, ibs: 0.001 };
++
++  const vigencia = VIGENCIAS[ano];
++  if (!vigencia) {
++    const limites = Object.keys(VIGENCIAS).map(Number);
++    throw new AliquotaNaoFixadaError(
++      `Não há alíquota de IBS/CBS definida para ${ano}. A tabela cobre de ` +
++        `${Math.min(...limites)} a ${Math.max(...limites)} — antes disso o tributo não existia, ` +
++        `depois disso ainda não há norma.`,
++      ano,
++      "ambos",
++    );
++  }
++
++  const cbs = overrides[ano]?.cbs ?? vigencia.cbs;
++  const ibs = overrides[ano]?.ibs ?? vigencia.ibs;
++
++  const faltando: Array<"cbs" | "ibs"> = [];
++  if (cbs === null || cbs === undefined) faltando.push("cbs");
++  if (ibs === null || ibs === undefined) faltando.push("ibs");
++
++  if (faltando.length > 0) {
++    const quais = faltando.map((t) => t.toUpperCase()).join(" e ");
++    throw new AliquotaNaoFixadaError(
++      `Alíquota de ${quais} para ${ano} ainda não foi fixada por Resolução do Senado ` +
++        `(${vigencia.fundamento}). Emitir com um valor estimado seria subdeclaração. ` +
++        `Configure a alíquota publicada antes de emitir nesta competência.`,
++      ano,
++      faltando.length === 2 ? "ambos" : faltando[0]!,
++    );
++  }
++
++  return { cbs: cbs as number, ibs: ibs as number };
++}
++
++/** Anos com alíquota integralmente fixada hoje — útil para UI e diagnóstico. */
++export function competenciasComAliquotaFixada(): number[] {
++  return Object.entries(VIGENCIAS)
++    .filter(([, v]) => v.cbs !== null && v.ibs !== null)
++    .map(([ano]) => Number(ano))
++    .sort();
+ }
+ 
+ export interface TributosReforma {
+@@ -84,12 +196,14 @@ export function calcularTributosReforma(params: {
+   baseCentavos: Centavos;
+   competencia: string;
+   regime: RegimeIbsCbs;
++  /** Alíquotas publicadas depois desta implementação — ver aliquotasReferencia. */
++  overridesAliquotas?: OverridesAliquotas;
+ }): TributosReforma {
+   const { baseCentavos, competencia, regime } = params;
+   if (!Number.isInteger(baseCentavos) || baseCentavos < 0) {
+     throw new Error("baseCentavos deve ser inteiro >= 0 (centavos)");
+   }
+-  const base = aliquotasReferencia(competencia);
++  const base = aliquotasReferencia(competencia, params.overridesAliquotas);
+   const fator = FATOR_REGIME[regime];
+ 
+   const cbsAliquota = arredondar4(base.cbs * fator);
+-- 
+2.43.0
+

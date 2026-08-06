@@ -1,0 +1,204 @@
+From fa8b54cf5cacc7db00a28919fcfe1a47861845cd Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Thu, 6 Aug 2026 17:03:25 +0000
+Subject: [PATCH] feat(db): colunas do grupo IBSCBS em notas_fiscais, com
+ integridade no banco
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Primeira metade do item B3 da auditoria pos-C5 (Critico n2): o grupo IBSCBS
+existia como TIPO e era consumido pelo FocusNfeProvider, mas nao tinha onde
+ser persistido — a declaracao so era preenchivel chamando o provider direto
+de um teste. Estas colunas sao o caminho de dados que faltava.
+
+Espelha o grupo .../DPS/infDPS/IBSCBS/valores/trib/gIBSCBS da NT-004:
+CST, cClassTrib, cCredPres, gTribRegular e gDif.
+
+COLUNAS DISCRETAS, NAO JSONB: com colunas o banco consegue exigir integridade
+referencial contra as tabelas de dominio oficiais. Um JSONB aceitaria qualquer
+coisa e empurraria toda a validacao para a aplicacao — o oposto do que se quer
+num enquadramento fiscal.
+
+A TRAVA QUE VALE O COMMIT: so 71 dos 164 cClassTrib sao aceitos em NFS-e; o
+resto e exclusivo de NF-e, CT-e, NFCom etc. Um CHECK nao pode consultar outra
+tabela, entao usei coluna gerada + chave estrangeira COMPOSTA sobre
+(codigo, aplica_nfse). Resultado: referenciar um codigo que existe mas nao vale
+para NFS-e e impossivel PELO BANCO, nao so pela aplicacao. Verificado: o codigo
+000003 ("Regime automotivo") existe na tabela, tem aplica_nfse=false, e o
+insert e recusado com "Key (ibscbs_cclasstrib, ibscbs_cclasstrib_vale_nfse)=
+(000003, t) is not present". Quando o cClassTrib e NULL a FK nao e verificada
+(MATCH SIMPLE), entao nota sem grupo IBSCBS continua valida.
+
+CHECKs replicando validarDeclaracao() no banco (defesa em profundidade — as
+duas camadas podem divergir por bug, e a do banco nao tem como ser contornada):
+CST e cClassTrib andam juntos; prefixo do cClassTrib igual ao CST; gTribRegular
+coerente; gDif so em CST 510/515 e obrigatorio neles; percentuais em fracao.
+
+Verificacao comportamental num Postgres 16 limpo, 9 inserts: 2 aceitos (sem
+grupo, e com 200027 que vale para NFS-e) e 7 recusados (codigo valido para
+outro documento, codigo inexistente, par incompleto, prefixo divergente,
+diferimento em CST que nao admite, percentual fora de 0..1, gTribRegular
+incoerente).
+
+Idempotencia: a primeira versao quebrava ao reaplicar, porque a FK depende do
+indice unico e o DROP vinha na ordem errada. Corrigido — a FK cai antes.
+Reaplicada 2x sem erro.
+
+Sem mudanca de codigo neste commit: as colunas so passam a ser lidas/escritas
+depois de `supabase gen types`, que e o proximo passo.
+
+DoD: typecheck OK, lint OK, test OK (160), build OK.
+---
+ .../20260806120000_notas_grupo_ibscbs.sql     | 139 ++++++++++++++++++
+ 1 file changed, 139 insertions(+)
+ create mode 100644 supabase/migrations/20260806120000_notas_grupo_ibscbs.sql
+
+diff --git a/supabase/migrations/20260806120000_notas_grupo_ibscbs.sql b/supabase/migrations/20260806120000_notas_grupo_ibscbs.sql
+new file mode 100644
+index 0000000..d9e554b
+--- /dev/null
++++ b/supabase/migrations/20260806120000_notas_grupo_ibscbs.sql
+@@ -0,0 +1,139 @@
++-- ============================================================================
++-- Grupo IBSCBS na nota fiscal (item B3 da auditoria pós-C5 / C5, parte final).
++--
++-- Até aqui o grupo IBSCBS existia como TIPO (`DeclaracaoTributariaIBSCBS`) e
++-- era consumido pelo FocusNfeProvider, mas não tinha onde ser persistido: a
++-- declaração só era preenchível chamando o provider direto de um teste. Estas
++-- colunas são o caminho de dados que faltava.
++--
++-- Espelha o grupo `.../DPS/infDPS/IBSCBS/valores/trib/gIBSCBS` da NT-004:
++--   CST · cClassTrib · cCredPres · gTribRegular · gDif
++--
++-- POR QUE COLUNAS DISCRETAS E NÃO UM JSONB: com colunas, o banco consegue
++-- exigir integridade referencial contra as tabelas de domínio oficiais. Um
++-- JSONB aceitaria qualquer coisa e empurraria toda a validação para a
++-- aplicação — exatamente o oposto do que se quer num enquadramento fiscal.
++-- ============================================================================
++
++
++-- ----------------------------------------------------------------------------
++-- 1. Pré-requisito da FK composta da seção 3.
++--
++-- `codigo` já é PK, então este UNIQUE é redundante para unicidade — ele existe
++-- só para servir de alvo da chave estrangeira composta, que é como o Postgres
++-- permite dizer "referencie uma linha QUE TAMBÉM satisfaça esta condição".
++-- ----------------------------------------------------------------------------
++-- A FK da seção 3 depende deste índice único, então ela cai primeiro — senão
++-- reaplicar a migration falha com "cannot drop constraint ... because other
++-- objects depend on it". Num banco novo os dois DROPs são no-op.
++ALTER TABLE notas_fiscais
++  DROP CONSTRAINT IF EXISTS fk_notas_cclasstrib_nfse;
++ALTER TABLE cclasstrib_ibscbs
++  DROP CONSTRAINT IF EXISTS uq_cclasstrib_codigo_aplica_nfse;
++ALTER TABLE cclasstrib_ibscbs
++  ADD CONSTRAINT uq_cclasstrib_codigo_aplica_nfse UNIQUE (codigo, aplica_nfse);
++
++
++-- ----------------------------------------------------------------------------
++-- 2. Colunas do grupo declarado
++-- ----------------------------------------------------------------------------
++ALTER TABLE notas_fiscais
++  ADD COLUMN IF NOT EXISTS ibscbs_cst          TEXT REFERENCES cst_ibscbs(codigo),
++  ADD COLUMN IF NOT EXISTS ibscbs_cclasstrib   TEXT,
++  ADD COLUMN IF NOT EXISTS ibscbs_ccredpres    TEXT REFERENCES ccredpres_ibscbs(codigo),
++  -- gTribRegular: "como seria a tributação regular", exigido pela tabela de
++  -- cClassTrib em operações sob condição suspensiva/resolutória.
++  ADD COLUMN IF NOT EXISTS ibscbs_trib_reg_cst        TEXT REFERENCES cst_ibscbs(codigo),
++  ADD COLUMN IF NOT EXISTS ibscbs_trib_reg_cclasstrib TEXT REFERENCES cclasstrib_ibscbs(codigo),
++  -- gDif: percentuais de diferimento por esfera, em FRAÇÃO (0.6000 = 60%).
++  ADD COLUMN IF NOT EXISTS ibscbs_dif_perc_uf  NUMERIC(6,4),
++  ADD COLUMN IF NOT EXISTS ibscbs_dif_perc_mun NUMERIC(6,4),
++  ADD COLUMN IF NOT EXISTS ibscbs_dif_perc_cbs NUMERIC(6,4);
++
++COMMENT ON COLUMN notas_fiscais.ibscbs_cst IS
++  'CST-IBS/CBS declarado na DPS. NULL enquanto o grupo IBSCBS não for preenchido '
++  '— não há data confirmada de obrigatoriedade para NFS-e.';
++
++
++-- ----------------------------------------------------------------------------
++-- 3. A trava forte: o cClassTrib precisa existir E valer para NFS-e.
++--
++-- Só 71 dos 164 códigos são aceitos em NFS-e; o resto é exclusivo de NF-e,
++-- CT-e, NFCom etc. Um CHECK não pode consultar outra tabela, então usamos uma
++-- coluna gerada + chave estrangeira COMPOSTA: a nota só referencia um código
++-- cuja linha tenha `aplica_nfse = true`. Fica impossível pelo banco, não só
++-- pela aplicação.
++--
++-- Quando `ibscbs_cclasstrib` é NULL a coluna gerada vale false e a FK não é
++-- verificada (MATCH SIMPLE ignora a tupla se qualquer coluna for NULL) — ou
++-- seja, nota sem grupo IBSCBS continua válida.
++-- ----------------------------------------------------------------------------
++ALTER TABLE notas_fiscais
++  ADD COLUMN IF NOT EXISTS ibscbs_cclasstrib_vale_nfse BOOLEAN
++    GENERATED ALWAYS AS (ibscbs_cclasstrib IS NOT NULL) STORED;
++
++ALTER TABLE notas_fiscais
++  DROP CONSTRAINT IF EXISTS fk_notas_cclasstrib_nfse;
++ALTER TABLE notas_fiscais
++  ADD CONSTRAINT fk_notas_cclasstrib_nfse
++  FOREIGN KEY (ibscbs_cclasstrib, ibscbs_cclasstrib_vale_nfse)
++  REFERENCES cclasstrib_ibscbs (codigo, aplica_nfse);
++
++
++-- ----------------------------------------------------------------------------
++-- 4. Coerência interna do grupo
++--
++-- As mesmas regras que `validarDeclaracao()` aplica na aplicação, agora também
++-- no banco. Defesa em profundidade: as duas camadas podem divergir por bug, e
++-- a do banco não tem como ser contornada.
++-- ----------------------------------------------------------------------------
++
++-- CST e cClassTrib andam juntos: ou os dois, ou nenhum.
++ALTER TABLE notas_fiscais DROP CONSTRAINT IF EXISTS chk_ibscbs_par_completo;
++ALTER TABLE notas_fiscais ADD CONSTRAINT chk_ibscbs_par_completo CHECK (
++  (ibscbs_cst IS NULL     AND ibscbs_cclasstrib IS NULL) OR
++  (ibscbs_cst IS NOT NULL AND ibscbs_cclasstrib IS NOT NULL)
++);
++
++-- Regra estrutural da tabela oficial: os 3 primeiros dígitos do cClassTrib
++-- repetem o CST.
++ALTER TABLE notas_fiscais DROP CONSTRAINT IF EXISTS chk_ibscbs_prefixo;
++ALTER TABLE notas_fiscais ADD CONSTRAINT chk_ibscbs_prefixo CHECK (
++  ibscbs_cclasstrib IS NULL OR left(ibscbs_cclasstrib, 3) = ibscbs_cst
++);
++
++-- gTribRegular: mesmo par, mesma regra de prefixo.
++ALTER TABLE notas_fiscais DROP CONSTRAINT IF EXISTS chk_ibscbs_trib_reg;
++ALTER TABLE notas_fiscais ADD CONSTRAINT chk_ibscbs_trib_reg CHECK (
++  (ibscbs_trib_reg_cst IS NULL AND ibscbs_trib_reg_cclasstrib IS NULL) OR
++  (ibscbs_trib_reg_cst IS NOT NULL AND ibscbs_trib_reg_cclasstrib IS NOT NULL
++   AND left(ibscbs_trib_reg_cclasstrib, 3) = ibscbs_trib_reg_cst)
++);
++
++-- gDif só existe em CST 510 e 515, e é obrigatório neles.
++ALTER TABLE notas_fiscais DROP CONSTRAINT IF EXISTS chk_ibscbs_diferimento;
++ALTER TABLE notas_fiscais ADD CONSTRAINT chk_ibscbs_diferimento CHECK (
++  CASE
++    WHEN ibscbs_cst IN ('510', '515') THEN
++      COALESCE(ibscbs_dif_perc_uf, ibscbs_dif_perc_mun, ibscbs_dif_perc_cbs) IS NOT NULL
++    ELSE
++      ibscbs_dif_perc_uf IS NULL AND ibscbs_dif_perc_mun IS NULL AND ibscbs_dif_perc_cbs IS NULL
++  END
++);
++
++-- Percentuais são frações.
++ALTER TABLE notas_fiscais DROP CONSTRAINT IF EXISTS chk_ibscbs_dif_fracao;
++ALTER TABLE notas_fiscais ADD CONSTRAINT chk_ibscbs_dif_fracao CHECK (
++  (ibscbs_dif_perc_uf  IS NULL OR ibscbs_dif_perc_uf  BETWEEN 0 AND 1) AND
++  (ibscbs_dif_perc_mun IS NULL OR ibscbs_dif_perc_mun BETWEEN 0 AND 1) AND
++  (ibscbs_dif_perc_cbs IS NULL OR ibscbs_dif_perc_cbs BETWEEN 0 AND 1)
++);
++
++
++-- ----------------------------------------------------------------------------
++-- 5. Índice para relatório de conformidade por enquadramento.
++-- Parcial: a esmagadora maioria das notas não tem grupo IBSCBS hoje.
++-- ----------------------------------------------------------------------------
++CREATE INDEX IF NOT EXISTS idx_notas_ibscbs_cclasstrib
++  ON notas_fiscais(empresa_id, ibscbs_cclasstrib)
++  WHERE ibscbs_cclasstrib IS NOT NULL;
+-- 
+2.43.0
+
