@@ -63,6 +63,14 @@ export interface FocusNfeConfig {
   fetchImpl?: typeof fetch;
   /** Injetável para teste (default: setTimeout). */
   esperar?: (ms: number) => Promise<void>;
+  /**
+   * Carrega os cClassTrib válidos da tabela de domínio nacional. Injetado como
+   * FUNÇÃO de propósito: o provider é camada de integração fiscal e não deve
+   * conhecer o banco (regra 2). Quem compõe é o motor Inngest, que já tem o
+   * client admin. Sem o carregador, a validação continua estrutural — CST,
+   * prefixo e subgrupos condicionais —, mas não confere a EXISTÊNCIA do código.
+   */
+  carregarCClassTribConhecidos?: () => Promise<ReadonlySet<string>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +175,9 @@ export class FocusNfeProvider implements FiscalProvider {
   private readonly intervaloPollingMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly esperar: (ms: number) => Promise<void>;
+  private readonly carregarCClassTribConhecidos:
+    | (() => Promise<ReadonlySet<string>>)
+    | null;
 
   constructor(cfg: FocusNfeConfig) {
     if (!cfg.token) {
@@ -182,6 +193,7 @@ export class FocusNfeProvider implements FiscalProvider {
     this.intervaloPollingMs = cfg.intervaloPollingMs ?? 2_000;
     this.fetchImpl = cfg.fetchImpl ?? fetch;
     this.esperar = cfg.esperar ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.carregarCClassTribConhecidos = cfg.carregarCClassTribConhecidos ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -190,6 +202,9 @@ export class FocusNfeProvider implements FiscalProvider {
 
   async emitir(input: EmitirNfseInput): Promise<EmitirNfseResult> {
     const ref = input.referenciaExterna;
+
+    await this.validarGrupoIbsCbs(input);
+
     const envio = await this.requisitar("POST", `/v2/nfse?ref=${encodeURIComponent(ref)}`, {
       corpo: this.montarPayload(input),
     });
@@ -372,6 +387,49 @@ export class FocusNfeProvider implements FiscalProvider {
   }
 
   /**
+   * Valida o grupo IBSCBS antes de qualquer coisa sair para a prefeitura.
+   *
+   * Quando há carregador injetado, a validação passa a conferir também a
+   * EXISTÊNCIA do cClassTrib na tabela de domínio oficial (164 códigos) — é a
+   * trava que impede declarar um enquadramento inventado.
+   *
+   * Se o carregador falhar (banco fora do ar, tabela não semeada), o erro é
+   * TRANSIENTE: é problema de infraestrutura nossa, não da declaração. Deixar
+   * passar sem conferir seria pior — emitiria com enquadramento não verificado.
+   */
+  private async validarGrupoIbsCbs(input: EmitirNfseInput): Promise<void> {
+    const declaracao = input.servico.reforma.declaracao ?? null;
+    if (!declaracao) return;
+
+    let conhecidos: ReadonlySet<string> | undefined;
+    if (this.carregarCClassTribConhecidos) {
+      try {
+        conhecidos = await this.carregarCClassTribConhecidos();
+      } catch (e) {
+        throw new FiscalErrorTransient(
+          `Não foi possível carregar a tabela de domínio cClassTrib: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          "dominio_indisponivel",
+          null,
+        );
+      }
+    }
+
+    // Falha fechada: CST/cClassTrib incoerentes são erro de enquadramento
+    // fiscal, não instabilidade. Retry não conserta — erro PERMANENTE
+    // (regra 8), e a nota nem chega a ser enviada à prefeitura.
+    const validacao = validarDeclaracao(declaracao, { cClassTribConhecidos: conhecidos });
+    if (!validacao.valido) {
+      throw new FiscalErrorPermanent(
+        `Grupo IBSCBS inválido: ${validacao.erros.join("; ")}`,
+        "ibscbs_invalido",
+        declaracao,
+      );
+    }
+  }
+
+  /**
    * Traduz o nosso `EmitirNfseInput` no JSON da Focus NFe.
    *
    * GRUPO IBSCBS (item C5): quando `servico.reforma.declaracao` está
@@ -389,20 +447,6 @@ export class FocusNfeProvider implements FiscalProvider {
     const { prestador, tomador, servico } = input;
     const ehCnpj = tomador.cpfCnpj.replace(/\D/g, "").length === 14;
     const declaracao = servico.reforma.declaracao ?? null;
-
-    if (declaracao) {
-      // Falha fechada: CST/cClassTrib incoerentes são erro de enquadramento
-      // fiscal, não instabilidade. Retry não conserta — erro PERMANENTE
-      // (regra 8), e a nota nem chega a ser enviada à prefeitura.
-      const validacao = validarDeclaracao(declaracao);
-      if (!validacao.valido) {
-        throw new FiscalErrorPermanent(
-          `Grupo IBSCBS inválido: ${validacao.erros.join("; ")}`,
-          "ibscbs_invalido",
-          declaracao,
-        );
-      }
-    }
 
     return {
       data_emissao: `${servico.competencia}T00:00:00`,

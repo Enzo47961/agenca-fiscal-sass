@@ -342,10 +342,10 @@ export function validarDeclaracao(
 // ---------------------------------------------------------------------------
 
 export const PENDENCIAS_C5 = [
-  "Os 164 cClassTrib JÁ FORAM IMPORTADOS (migration de seed, conferidos " +
-    "164/164 por CST). Falta ainda um serviço que leia a tabela e injete " +
-    "`cClassTribConhecidos` em validarDeclaracao — hoje nenhum chamador passa " +
-    "esse conjunto, então a trava de existência do código está inativa.",
+  "A validação contra a tabela oficial está ATIVA no caminho de emissão " +
+    "(services/dominio-fiscal.ts, injetado pelo motor no resolverProvider). " +
+    "Falta ativá-la também na CRIAÇÃO da nota: hoje a declaração só é " +
+    "conferida na hora de emitir, não quando o usuário a informa.",
   "As colunas de redução, os indicadores e o tipo de alíquota JÁ FORAM " +
     "PREENCHIDOS (migration de complemento). Falta usar `perc_reducao_ibs`/" +
     "`perc_reducao_cbs` no cálculo: hoje a redução ainda vem do enum " +

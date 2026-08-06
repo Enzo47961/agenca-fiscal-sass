@@ -8,6 +8,7 @@ import {
 } from "../events";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolverProvider } from "@/lib/fiscal/providers";
+import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
 import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 import {
   FiscalErrorPermanent,
@@ -95,7 +96,13 @@ export const emitirNfse = inngest.createFunction(
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
       const resultado = await step.run(`emitir-tentativa-${tentativa}`, async () => {
         const inicio = Date.now();
-        const provider = resolverProvider(empresa.provider_fiscal);
+        // Composição das dependências do provider AQUI, não lá dentro: o
+        // client admin vive no motor (regra 2) e o provider recebe só uma
+        // função. É o que ativa a validação do cClassTrib contra a tabela
+        // oficial em vez de só a validação estrutural.
+        const provider = resolverProvider(empresa.provider_fiscal, {
+          carregarCClassTribConhecidos: () => carregarCClassTribConhecidos(db),
+        });
 
         try {
           // Timeout defensivo: se a tentativa anterior morreu APÓS o envio,

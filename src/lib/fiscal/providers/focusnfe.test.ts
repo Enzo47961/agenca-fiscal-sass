@@ -450,3 +450,102 @@ describe("grupo IBSCBS no payload", () => {
     expect(chamadas).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Validação contra a TABELA DE DOMÍNIO oficial (carregador injetado).
+// Sem o carregador a validação é só estrutural; com ele, confere a existência
+// do cClassTrib nos 164 códigos oficiais.
+// ---------------------------------------------------------------------------
+
+function comDeclaracao(cst: string, cClassTrib: string): EmitirNfseInput {
+  return {
+    ...ENTRADA,
+    servico: {
+      ...ENTRADA.servico,
+      reforma: { ...ENTRADA.servico.reforma, declaracao: { cst, cClassTrib } },
+    },
+  };
+}
+
+describe("validação contra a tabela de domínio", () => {
+  it("aceita código que existe na tabela", async () => {
+    const { impl, chamadas } = fetchFalso([{ status: 200, corpo: AUTORIZADA }]);
+    const provider = new FocusNfeProvider({
+      token: "t",
+      ambiente: "homologacao",
+      fetchImpl: impl,
+      esperar: async () => {},
+      carregarCClassTribConhecidos: async () => new Set(["200027", "000001"]),
+    });
+
+    const r = await provider.emitir(comDeclaracao("200", "200027"));
+    expect(r.numeroNfse).toBe("4321");
+    expect(chamadas).toHaveLength(1);
+  });
+
+  // O caso que a trava existe para pegar: código estruturalmente perfeito
+  // (6 dígitos, prefixo batendo com o CST) mas que não existe na tabela.
+  it("recusa código inexistente mesmo com estrutura perfeita", async () => {
+    const { impl, chamadas } = fetchFalso([{ status: 200, corpo: AUTORIZADA }]);
+    const provider = new FocusNfeProvider({
+      token: "t",
+      ambiente: "homologacao",
+      fetchImpl: impl,
+      esperar: async () => {},
+      carregarCClassTribConhecidos: async () => new Set(["200027"]),
+    });
+
+    const erro = await provider.emitir(comDeclaracao("200", "200999")).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
+    expect((erro as FiscalErrorPermanent).message).toContain("tabela de domínio");
+    // Nada saiu para a prefeitura.
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("sem carregador, a validação estrutural continua valendo", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    // 200999 não existe na tabela, mas sem carregador não há como saber —
+    // a estrutura está correta, então passa.
+    const r = await provider.emitir(comDeclaracao("200", "200999"));
+    expect(r.numeroNfse).toBe("4321");
+    expect(chamadas).toHaveLength(1);
+  });
+
+  // Banco fora do ar não é erro de enquadramento: é infra nossa. Transiente,
+  // para o backoff tentar de novo — e nunca emitir sem ter conferido.
+  it("falha ao carregar a tabela é TRANSIENTE e não emite", async () => {
+    const { impl, chamadas } = fetchFalso([{ status: 200, corpo: AUTORIZADA }]);
+    const provider = new FocusNfeProvider({
+      token: "t",
+      ambiente: "homologacao",
+      fetchImpl: impl,
+      esperar: async () => {},
+      carregarCClassTribConhecidos: async () => {
+        throw new Error("conexão recusada");
+      },
+    });
+
+    const erro = await provider.emitir(comDeclaracao("200", "200027")).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(FiscalErrorTransient);
+    expect((erro as FiscalErrorTransient).codigo).toBe("dominio_indisponivel");
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("sem declaração, o carregador nem é chamado", async () => {
+    let chamou = false;
+    const { impl } = fetchFalso([{ status: 200, corpo: AUTORIZADA }]);
+    const provider = new FocusNfeProvider({
+      token: "t",
+      ambiente: "homologacao",
+      fetchImpl: impl,
+      esperar: async () => {},
+      carregarCClassTribConhecidos: async () => {
+        chamou = true;
+        return new Set<string>();
+      },
+    });
+
+    await provider.emitir(ENTRADA);
+    expect(chamou).toBe(false);
+  });
+});
