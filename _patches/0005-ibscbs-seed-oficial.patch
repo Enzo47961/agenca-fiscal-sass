@@ -1,0 +1,597 @@
+From 9d4e19a801f7c08fefc30b8ee5540714b03e2445 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Wed, 5 Aug 2026 21:14:39 +0000
+Subject: [PATCH 5/5] =?UTF-8?q?feat(fiscal):=20seed=20das=20tabelas=20ofic?=
+ =?UTF-8?q?iais=20IBSCBS=20=E2=80=94=20164=20cClassTrib=20+=2013=20cCredPr?=
+ =?UTF-8?q?es?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fecha a pendencia P1 do C5 com os dados oficiais fornecidos
+(`relatorio_pesquisa_oficial_ibscbs.md` + CSVs), extraidos ao vivo do DOM do
+Portal da Conformidade Facil (SVRS/ENCAT) em 05/08/2026 — a fonte de maior
+confianca da pesquisa, por nao passar por modelo de resumo.
+
+CONFERENCIA FEITA ANTES DE GERAR O SEED (nao so ao aplicar):
+- 164 codigos, distribuicao por CST IDENTICA a CCLASSTRIB_ESPERADOS_POR_CST
+  ja codificada em ibscbs.ts — duas pesquisas independentes convergindo;
+- todos com 6 digitos, sem duplicata, prefixo sempre igual ao CST;
+- os 18 indicadores de subgrupo do CST batem 100% com TABELA_CST, ou seja a
+  logica de validarDeclaracao() esta confirmada correta contra a fonte oficial.
+
+supabase/migrations/20260805200000_ibscbs_seed_tabelas_oficiais.sql
+- 164 cClassTrib com descricao, CST, artigo da LC 214/2025 e URL do
+  dispositivo no Planalto (a coluna artigo_legal do CSV traz os dois juntos,
+  separados aqui).
+- Nova tabela ccredpres_ibscbs com os 13 codigos de credito presumido, RLS
+  igual as demais tabelas de dominio.
+- Corrige a descricao dos CST 010 e 011 para o texto oficial do portal (so
+  texto; os indicadores ja estavam certos).
+
+DUAS RESSALVAS DA FONTE, REGISTRADAS NA MIGRATION PARA NAO SE PERDEREM:
+- cCredPres: o portal exibe os codigos como inteiros (1-13) mas a NT 004
+  define o campo como 2 DIGITOS; gravamos com zero a esquerda ('01'..'13'),
+  que e o que o XML deve levar, mas o zero-padding NAO foi confirmado
+  literalmente na norma. E a vigencia e POR TRIBUTO (IBS e CBS independentes),
+  entregue em texto livre pela fonte — guardada como texto bruto em vez de
+  forcar uma data que distorceria o dado.
+- cClassTrib: vigencia_inicio/fim ficam NULL porque a pesquisa confirmou que
+  a coluna dIniVig/dFimVig NAO EXISTE na fonte para cClassTrib nem para CST.
+
+O QUE O SEED NAO TROUXE (nova pendencia, mais estreita que a antiga):
+perc_reducao_ibs/perc_reducao_cbs, os indicadores (trib. regular, credito
+presumido, estorno) e o tipo de aliquota existem no portal mas NAO vieram no
+CSV exportado — ficaram NULL. Sem eles nao da para derivar a reducao a partir
+do cClassTrib. PENDENCIAS_C5 atualizado para refletir isso, e tambem para
+registrar que nenhum chamador ainda passa `cClassTribConhecidos` a
+validarDeclaracao — a trava de existencia do codigo segue inativa ate existir
+o servico que le a tabela.
+
+Verificacao: as 6 migrations aplicadas do zero num Postgres 16 limpo.
+cclasstrib_conferencia devolve 164 esperados / 164 importados / tudo_confere =
+true, zero linhas divergentes; ccredpres com 13 codigos de '01' a '13';
+descricoes de CST corrigidas; reaplicacao sem erro (idempotente).
+
+DoD: typecheck OK, lint OK, test OK (138), build OK.
+---
+ AUDITORIA_POS_C5.md                           | 215 +++++++++++++++
+ src/lib/fiscal/ibscbs.test.ts                 |   2 +-
+ src/lib/fiscal/ibscbs.ts                      |  17 +-
+ ...805200000_ibscbs_seed_tabelas_oficiais.sql | 254 ++++++++++++++++++
+ 4 files changed, 483 insertions(+), 5 deletions(-)
+ create mode 100644 AUDITORIA_POS_C5.md
+ create mode 100644 supabase/migrations/20260805200000_ibscbs_seed_tabelas_oficiais.sql
+
+diff --git a/AUDITORIA_POS_C5.md b/AUDITORIA_POS_C5.md
+new file mode 100644
+index 0000000..a8a5eb5
+--- /dev/null
++++ b/AUDITORIA_POS_C5.md
+@@ -0,0 +1,215 @@
++# Auditoria pós-C5 — Agência Fiscal SaaS
++
++**Data:** 05/08/2026 · **Commit auditado:** `cc7d492` (4 commits após `9f9f4ce`)
++**Escopo:** o que ainda impede a emissão de uma NFS-e juridicamente válida com o grupo IBSCBS.
++**Método:** leitura do código no estado atual, não do relatório anterior. Cada afirmação abaixo foi verificada por busca no repositório; onde a fonte é normativa, é a `ibscbs_modelagem_tecnica.md`.
++**Nada foi implementado nesta etapa.**
++
++---
++
++## 0. Uma correção de escopo antes de tudo
++
++O pedido fala em "NF-e válida com IBS/CBS". **O produto não emite NF-e — emite NFS-e**, e essa distinção não é terminológica. O achado estrutural central da pesquisa de modelagem é que o grupo IBSCBS **não é o mesmo objeto** nos dois documentos: na NF-e é um grupo único que o emitente calcula e transmite; na NFS-e ele existe em dois lugares, um **declarado** pelo prestador na DPS e outro **calculado** pelo Ambiente de Dados Nacional. Tudo abaixo trata de NFS-e. Se em algum momento o produto passar a emitir NF-e de mercadoria, praticamente nada desta auditoria se aproveita no domínio tributário.
++
++## 0.1. O que mudou desde a auditoria original
++
++Resolvidos: **C1** (IDOR via migration real), **C2** (já estava — o relatório original auditou um espelho velho), **C3** (SQL solto), **M2** (comparação em tempo constante). Parciais: **C4** (provider existe e é testado; falta credencial e habilitação), **C5** (modelagem existe; falta caminho de dados e a tabela oficial).
++
++Estado do Definition of Done: typecheck, lint, **138 testes** e build passando.
++
++---
++
++## 1. O que impede, hoje, a emissão de uma NFS-e válida com IBS/CBS
++
++Sete bloqueios. Os três primeiros impedem qualquer emissão real; os quatro seguintes impedem que ela saia **correta** com IBS/CBS.
++
++### B1 — Não existe emissor habilitado (bloqueio externo, não de código)
++
++Nenhuma empresa cadastrada na Focus NFe; sem inscrição municipal; sem certificado A1 anexado. NFS-e é ISS, que é municipal: nenhum município autoriza nota — nem em homologação — para prestador sem inscrição municipal. Enquanto isso não existir, nada abaixo pode ser validado ponta a ponta.
++
++### B2 — `provider_fiscal` está fixo em `mock`, sem caminho de produto para trocar
++
++`empresas.provider_fiscal` tem default `'mock'` e **não existe nenhum campo em `dadosFiscaisSchema` nem no formulário de configurações** para alterá-lo. O `FocusNfeProvider` está implementado e registrado, mas nenhum tenant consegue chegar até ele. Verificado: `provider_fiscal` só aparece em `emitir-nfse.ts:98` (leitura) e em comentários.
++
++### B3 — O grupo IBSCBS não tem caminho de dados até o provider
++
++Este é o achado mais relevante desta auditoria e o que redimensiona o que o C5 entregou. `DeclaracaoTributariaIBSCBS` existe como tipo em `provider.ts` e é consumida em `focusnfe.ts`. Fora desses dois arquivos, **não existe em lugar nenhum**:
++
++- `notas_fiscais` não tem coluna para `cst`, `cClassTrib`, `cCredPres`, `gTribRegular` ou `gDif`;
++- `solicitarEmissaoSchema` (`services/notas.ts:15-30`) não aceita nenhum desses campos;
++- `emitir-nfse.ts` monta `servico.reforma` sem `declaracao` nem `intencao`;
++- nenhum formulário coleta CST ou cClassTrib.
++
++Consequência: hoje a declaração só é preenchível chamando o provider diretamente de um teste. **O C5 entregou o vocabulário e a validação, não o fluxo.** Isso não foi omissão silenciosa — a modelagem tinha que vir antes —, mas precisa ser dito com clareza para não se confundir "C5 implementado" com "grupo IBSCBS funcionando".
++
++### B4 — A tabela `cclasstrib_ibscbs` está vazia, e ninguém a lê
++
++164 códigos oficiais, zero importados (conferível pela view `cclasstrib_conferencia`). Além disso, `validarDeclaracao()` aceita `cClassTribConhecidos` como opção, mas **nenhum chamador passa esse conjunto** — inclusive o `FocusNfeProvider`. Ou seja: mesmo depois de importar os 164 códigos, a validação continuará sem consultá-los até existir um serviço que leia a tabela e injete o conjunto.
++
++### B5 — Não existe mapeamento negócio → CST/cClassTrib
++
++O `RegimeIbsCbs` tem 5 valores; a tabela oficial tem 164 códigos, cada um amarrado a um artigo da LC 214/2025. Não há função, tabela ou tela que faça essa ponte. É a decisão que a própria pesquisa marca como **contábil, não técnica**.
++
++### B6 — Alíquotas continuam hardcoded para 2026 (item C6, ainda aberto)
++
++`aliquotasReferencia(competencia)` recebe a competência, valida que é um ano, **e devolve `{ cbs: 0.009, ibs: 0.001 }` para qualquer ano**, inclusive 2030. É o risco de subdeclaração silenciosa a partir de 01/01/2027. O parâmetro na assinatura dá a aparência de que a vigência é tratada.
++
++### B7 — A base de cálculo do IBS/CBS não segue a fórmula da NT-004
++
++`services/notas.ts:42` usa `baseCentavos: dados.valorServicoCentavos` — o valor bruto do serviço. A fórmula confirmada por transcrição literal é:
++
++```
++vBC = vServ − descIncond − vCalcReeRepRes − vISSQN − vPIS − vCOFINS   (até 2026)
++vBC = vServ − descIncond − vCalcReeRepRes − vISSQN                    (até 2032)
++```
++
++A dedução do ISSQN é permanente durante toda a transição. Hoje o sistema **superestima a base**, e portanto o IBS/CBS destacado. Em 2026 isso é informativo; a partir de 2027 passa a ser recolhimento a maior.
++
++---
++
++## 2. Pendências do `PENDENCIAS_C5` — por que cada uma não foi implementada
++
++As sete pendências foram escritas em código de propósito, para não virarem "resolvido" por esquecimento. Nenhuma delas é dívida acidental.
++
++**P1 — Importar os 164 cClassTrib.** Não implementada porque **os dados não existem no material entregue**. A pesquisa confirmou a contagem ("Exibindo 164 de 164 registros") e a distribuição por CST, mas as 164 linhas ficaram no relatório de origem. Semear parcialmente uma tabela de enquadramento fiscal seria pior que deixá-la vazia: alguém leria as poucas linhas presentes como se fossem a tabela inteira. Depende só de dado.
++
++**P2 — Mapeamento negócio → CST/cClassTrib.** Não implementada porque é **decisão contábil**. Escolher que uma consultoria de TI cai no cClassTrib X e uma clínica no Y exige interpretar qual artigo da LC 214/2025 se aplica a cada atividade. Um palpite meu aqui viraria enquadramento fiscal errado com aparência de funcionalidade — exatamente o risco #2 da auditoria original. A própria `reforma.ts` já alertava "confirme com um contador antes de usar em produção".
++
++**P3 — Papel real do NBS.** Não implementada porque **a fonte primária não pôde ser lida**: o Anexo VIII (correlação NBS ↔ cIndOp ↔ cClassTrib) e o Anexo VI foram bloqueados por proxy no `.zip` do gov.br. A hipótese mais sustentada é que existe um `cTribNac` de 6 dígitos e que o NBS funciona como tabela de correlação/validação cruzada, não campo livre. Hoje `codigoNbs` é string opcional. Mudar isso sem o Anexo seria trocar uma incerteza por outra.
++
++**P4 — Caminho XML de `opSimpNac`/`regApIBSCBSSN`.** Os tipos e os códigos (1..4 e 1..3) estão modelados e testados, mas **não vão ao payload** porque não se confirmou se esses campos ficam dentro ou fora do grupo IBSCBS. Enviar num caminho errado é rejeição de schema.
++
++**P5 — Fórmula de base de cálculo da NT-009 vs. NT-004.** Não resolvida porque as duas fórmulas são diferentes e **não se confirmou se a NT-009 substitui ou coexiste** com a NT-004. Implementar a errada erra a base de todo o cálculo — ver B7.
++
++**P6 — Data de obrigatoriedade do preenchimento do grupo.** Não implementada porque **não existe.** O Ato Conjunto RFB/CGIBS nº 4/2026 rege a obrigatoriedade de **emissão do documento** (1º/10/2026 para serviços em geral, 1º/01/2027 para Simples), não a de **preenchimento do IBSCBS**; e a NF-e teve as datas de produção **suspensas** na NT 2025.002 v1.51. Por isso o grupo ficou opcional e controlado por flag, e não por calendário. Travar numa data inventada seria pior que não travar.
++
++**P7 — Validação contra o XSD oficial.** Não feita porque **o ambiente de pesquisa teve acesso direto a domínios `.gov.br` bloqueado** nas três pesquisas. Toda a informação oficial veio por fetch mediado ou extração de DOM. Exige alguém baixar o XSD manualmente fora deste ambiente.
++
++---
++
++## 3. Campos, regras e validações da reforma ainda ausentes
++
++### 3.1. Campos da DPS não modelados
++
++Comparando com a estrutura confirmada (`.../DPS/infDPS/IBSCBS/`):
++
++| Campo/grupo | O que é | Estado |
++|---|---|---|
++| `finNFSe` | 0=regular · 1=crédito · 2=débito | Ausente |
++| `indFinal` | uso/consumo pessoal | Ausente |
++| `cIndOp` | código indicador da operação (Anexo VII) | Ausente |
++| `tpOper` / `tpEnteGov` / `xTpEnteGov` | operações com entes governamentais | Ausente |
++| `gRefNFSe` | NFS-e referenciadas (até 99) | Ausente |
++| `indZFMALC` | alíquota zero de CBS na ZFM/ALC | Ausente |
++| `dest/` | **destinatário para fins de IBS/CBS** | Ausente |
++| `imovel/` | inscrição imobiliária, cCIB | Ausente |
++| `gReeRepRes` | reembolsos/repasses já tributados | Ausente |
++| `cCredPres` | código de crédito presumido | Tipo existe, sem tabela |
++| `gPgtoVinc` | vinculação com a transação de pagamento | Ausente |
++| `opSimpNac` / `regApIBSCBSSN` | Simples Nacional / regime híbrido | Tipos existem, não vão ao payload |
++| `cTribNac` | Código de Tributação Nacional (6 dígitos) | Ausente |
++| CST de PIS/COFINS (2 dígitos) | ramo **paralelo**, fora do IBSCBS | Ausente |
++
++Dois merecem destaque por serem armadilhas silenciosas. **`dest/` não é o `tomador`**: a estrutura oficial prevê que o destinatário para fins de IBS/CBS pode divergir de quem contratou o serviço, e o sistema hoje trata os dois como a mesma entidade. E **`gReeRepRes`** entra na fórmula da base de cálculo via `vCalcReeRepRes` — sem ele, a base de quem trabalha com reembolso/repasse sai errada por construção.
++
++### 3.2. Campos do lado calculado (retorno) não persistidos
++
++`ResultadoCalculoIBSCBS` existe como tipo, mas o `FocusNfeProvider` **não faz parse** desses campos no retorno e **não há colunas** para eles. Ficam perdidos: município de incidência, `vBC` efetivo, e por esfera (IBS-UF, IBS-Município, CBS) a alíquota parametrizada, o percentual de redução, a alíquota efetiva e o valor. São o dado de auditoria que prova o que o Fisco calculou.
++
++### 3.3. Validações ausentes
++
++- Regra granular obrigatório/vedado por campo para cada CST (lacuna 10 da pesquisa — documento de "Regras de Validação" não acessado). Hoje só os indicadores de alto nível estão implementados.
++- Coerência entre `codigo_servico`/NBS e o `cClassTrib` declarado (depende do Anexo VIII).
++- Elegibilidade de regime diferenciado — item **C7** da auditoria original, **ainda 100% aberto**: qualquer operador marca "redução de 60%" para qualquer nota.
++- Bloqueio de `simples_por_fora = true` quando `regimeTributario = 'mei'` — item **A5**, verificado como ainda ausente (`dadosFiscaisSchema` não tem `.refine()`).
++- Obrigatoriedade do NBS por regime tributário — item **A7**, ainda opcional para todos.
++- Vigência de alíquota por competência — item **C6**, ver B6.
++- `simples_por_fora` continua **decorativo**: verificado que aparece só em schema, CRUD e UI, nunca em cálculo. Item **A6**.
++
++### 3.4. Limitações estruturais
++
++Nota de **item único** — não há array de itens de serviço, então nada de `vBC` por item nem totalizadores. Nenhuma **geração ou validação de XML** local: dependemos inteiramente de o provider devolver a URL pronta. E não existe **feature flag por competência** para ligar o preenchimento do grupo, que é o mecanismo que P6 exige.
++
++---
++
++## 4. Depende só de dado oficial × exige desenvolvimento
++
++**Só dado oficial** (a implementação é mecânica depois que o dado chega): importar os 164 cClassTrib; tabela de `cCredPres` (Anexo IV); tabela de `cIndOp` (Anexo VII); correlação NBS ↔ cClassTrib (Anexo VIII); `dIniVig`/`dFimVig` por cClassTrib; alíquotas de referência de 2027+; caminho XML de `opSimpNac`/`regApIBSCBSSN`; resolução NT-004 vs. NT-009; XSD oficial.
++
++**Exige desenvolvimento** (nenhum dado externo trava): caminho de dados do IBSCBS ponta a ponta (B3); serviço que leia a tabela de domínio e injete em `validarDeclaracao` (B4); seletor de `provider_fiscal` (B2); fórmula da base de cálculo (B7 — a fórmula até 2026 já está confirmada); parametrização de vigência (B6 — a estrutura, não os números); parse e persistência do resultado calculado; feature flag; bloqueio MEI × por fora; efeito real de `simples_por_fora`; itens múltiplos.
++
++**Exige decisão de negócio/contábil**: o mapeamento negócio → CST/cClassTrib (B5) e a política de elegibilidade de regime diferenciado (C7).
++
++---
++
++## 5. Plano de execução por prioridade
++
++Esforço: **P** ≈ até 1 dia · **M** ≈ 1 a 3 dias · **G** ≈ 1 semana ou mais.
++
++### Crítico — sem isto não há emissão válida com IBS/CBS
++
++| # | Item | Esforço | Depende de |
++|---|---|---|---|
++| 1 | Cadastrar emissor na Focus + inscrição municipal + certificado A1 + habilitar homologação | M | Empresa de testes ou real |
++| 2 | Caminho de dados do IBSCBS ponta a ponta: migration com colunas, `solicitarEmissaoSchema`, motor, UI (B3) | M | — |
++| 3 | Importar os 164 cClassTrib + serviço que lê a tabela e injeta em `validarDeclaracao` (B4) | P após o dado | Dado oficial |
++| 4 | Fórmula da base de cálculo `vBC` com dedução de ISSQN (B7) | P | Resolver NT-004 × NT-009 para o caso completo |
++| 5 | Parametrizar `aliquotasReferencia()` por vigência (B6 / C6) | P | Estrutura sim; números de 2027+ não |
++| 6 | Seletor de `provider_fiscal` nas configurações (B2) | P | — |
++| 7 | Mapeamento negócio → CST/cClassTrib (B5) | G | **Contador** |
++| 8 | Validação de elegibilidade de regime diferenciado (C7) | M | Política de negócio |
++
++### Alto — antes de qualquer tráfego real
++
++| # | Item | Esforço |
++|---|---|---|
++| 9 | Bloquear MEI + `simples_por_fora` (A5) | P |
++| 10 | Parse e persistência do `ResultadoCalculoIBSCBS` (3.2) | M |
++| 11 | Feature flag por competência para o grupo IBSCBS (P6) | P |
++| 12 | Efeito real de `simples_por_fora` no crédito B2B, com data de opção (A6) | M |
++| 13 | Modelar `dest/` separado do tomador (3.1) | M |
++| 14 | CI/CD rodando o DoD a cada PR (A1) — verificado: `.github/workflows` ausente | P |
++| 15 | `middleware.ts` para refresh de sessão (A3) — verificado ausente, apesar do comentário no código | P |
++| 16 | Open redirect em `/auth/callback?next=` (A4) — verificado ainda aberto | P |
++| 17 | Obrigatoriedade do NBS por regime (A7) | P | 
++| 18 | Corrigir textos: landing "validação automática de CST" e ajuda "NBS substitui o código municipal" (A11) — ambos verificados ainda presentes | P |
++| 19 | Paginação em `listarClientes`/`statusDasNotas` e `GROUP BY` no banco (A8) — verificado: `statusDasNotas` ainda carrega todas as notas do tenant | P |
++| 20 | Rate limiting nas rotas expostas (A10) | M |
++
++### Médio
++
++| # | Item | Esforço |
++|---|---|---|
++| 21 | `gReeRepRes` (reembolsos/repasses) e efeito na base | M |
++| 22 | `cIndOp`, `indZFMALC`, `finNFSe`, `indFinal` | M |
++| 23 | `opSimpNac`/`regApIBSCBSSN` no payload | P após P4 |
++| 24 | Magic bytes do certificado A1 (M1) — verificado: valida só extensão | P |
++| 25 | Escapar HTML no template de e-mail (M3) — verificado: interpolação crua | P |
++| 26 | `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` no schema Zod (M4) — verificado ausente em `env.ts` e `.env.example` | P |
++| 27 | Totais de CBS/IBS no dashboard (M8) | P |
++| 28 | Índice `notas_fiscais(empresa_id, created_at DESC)` (M10) — verificado ausente | P |
++| 29 | `regime_ibscbs` de TEXT+CHECK para enum (M7) | P |
++| 30 | Split payment / `gPgtoVinc` (M5) | M |
++| 31 | Observabilidade estruturada (M6) | M |
++| 32 | Fan-out do job de excedentes (A9) | G |
++| 33 | LGPD: exportação/exclusão a pedido do titular (M9) | M |
++
++### Baixo
++
++| # | Item | Esforço |
++|---|---|---|
++| 34 | Itens múltiplos por nota | G |
++| 35 | Geração/validação local de XML contra XSD | G |
++| 36 | `imovel/`, `gRefNFSe`, `tpEnteGov` | M |
++| 37 | Testes de `emitir-nfse.ts` e `cobrar-excedentes.ts` (B1 original) | M |
++| 38 | Descartar formalmente Imposto Seletivo (B2 original) | P |
++| 39 | `catch` genérico mais defensivo nas Server Actions (B3 original) | P |
++| 40 | Processo de monitoramento de novas Notas Técnicas (B4 original) | — |
++
++---
++
++## 6. Caminho mais curto até uma NFS-e de homologação com IBS/CBS
++
++Se o objetivo for provar o fluxo o quanto antes, a ordem é: **1 → 6 → 2 → 3 → 4/5**. Os itens 7 e 8 podem esperar, desde que a primeira emissão use um cClassTrib escolhido manualmente e conferido por contador, em vez de um mapeamento automático.
++
++Duas coisas não devem ser antecipadas de jeito nenhum: **ligar o grupo IBSCBS em produção** antes de fechar P1, P2 e P7, e **tratar o mapeamento negócio → cClassTrib como problema de engenharia**. É o ponto onde um palpite errado vira enquadramento fiscal indevido com cara de funcionalidade pronta.
+diff --git a/src/lib/fiscal/ibscbs.test.ts b/src/lib/fiscal/ibscbs.test.ts
+index 0e4641d..6a4171e 100644
+--- a/src/lib/fiscal/ibscbs.test.ts
++++ b/src/lib/fiscal/ibscbs.test.ts
+@@ -215,7 +215,7 @@ describe("Simples Nacional (NT-009)", () => {
+ 
+ describe("pendências do C5", () => {
+   it("estão declaradas em código para não serem tratadas como resolvidas", () => {
+-    expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(7);
++    expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(8);
+     expect(PENDENCIAS_C5.join(" ")).toContain("164");
+     expect(PENDENCIAS_C5.join(" ")).toContain("contador");
+   });
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+index 6228c42..ab0c0bc 100644
+--- a/src/lib/fiscal/ibscbs.ts
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -59,8 +59,11 @@ export interface DefinicaoCst {
+ 
+ export const TABELA_CST: readonly DefinicaoCst[] = [
+   m("000", "Tributação integral", { exigeTributacao: true }),
+-  m("010", "Alíquotas uniformes", { exigeTributacao: true }),
+-  m("011", "Alíquotas uniformes reduzidas", { exigeTributacao: true, redAliquota: true }),
++  m("010", "Tributação com alíquotas uniformes", { exigeTributacao: true }),
++  m("011", "Tributação com alíquotas uniformes reduzidas", {
++    exigeTributacao: true,
++    redAliquota: true,
++  }),
+   m("200", "Alíquota reduzida", { exigeTributacao: true, redAliquota: true }),
+   m("220", "Alíquota fixa", { exigeTributacao: true }),
+   m("221", "Alíquota fixa proporcional", { exigeTributacao: true }),
+@@ -331,8 +334,14 @@ export function validarDeclaracao(
+ // ---------------------------------------------------------------------------
+ 
+ export const PENDENCIAS_C5 = [
+-  "Importar os 164 cClassTrib oficiais para a tabela de domínio " +
+-    "(cclasstrib_ibscbs). Sem eles, validarDeclaracao falha fechada.",
++  "Os 164 cClassTrib JÁ FORAM IMPORTADOS (migration de seed, conferidos " +
++    "164/164 por CST). Falta ainda um serviço que leia a tabela e injete " +
++    "`cClassTribConhecidos` em validarDeclaracao — hoje nenhum chamador passa " +
++    "esse conjunto, então a trava de existência do código está inativa.",
++  "As colunas de REDUÇÃO (perc_reducao_ibs/perc_reducao_cbs), os indicadores " +
++    "(trib. regular, crédito presumido, estorno) e o tipo de alíquota existem " +
++    "no portal oficial mas NÃO vieram no CSV exportado — ficaram NULL no seed. " +
++    "Sem elas não dá para derivar a redução a partir do cClassTrib.",
+   "Construir o mapeamento negócio → CST/cClassTrib. O enum RegimeIbsCbs " +
+     "(5 valores) não é suficiente para escolher entre 164 códigos, cada um " +
+     "amarrado a um artigo da LC 214/2025. É decisão contábil, não técnica — " +
+diff --git a/supabase/migrations/20260805200000_ibscbs_seed_tabelas_oficiais.sql b/supabase/migrations/20260805200000_ibscbs_seed_tabelas_oficiais.sql
+new file mode 100644
+index 0000000..913858f
+--- /dev/null
++++ b/supabase/migrations/20260805200000_ibscbs_seed_tabelas_oficiais.sql
+@@ -0,0 +1,254 @@
++-- ============================================================================
++-- SEED das tabelas de domínio oficiais do grupo IBSCBS.
++--
++-- Fonte: `relatorio_pesquisa_oficial_ibscbs.md` + CSVs (05/08/2026), extração
++-- ao vivo do DOM do Portal da Conformidade Fácil (SVRS/ENCAT) — o dado de
++-- maior confiança da pesquisa, por não passar por nenhum modelo de resumo.
++--   https://dfe-portal.svrs.rs.gov.br/CFF/ClassificacaoTributaria
++--   https://dfe-portal.svrs.rs.gov.br/CFF/TabelaCreditoPresumido
++-- Documento normativo associado: Informe Técnico 2025.002 v1.50 (15/04/2026);
++-- tabela do portal atualizada em 22/06/2026.
++--
++-- CONFERÊNCIA FEITA ANTES DE GERAR ESTE ARQUIVO:
++--   · 164 códigos, contagem por CST idêntica à esperada em ibscbs.ts;
++--   · todos com 6 dígitos, sem duplicata, prefixo sempre igual ao CST;
++--   · os 18 indicadores de subgrupo do CST batem 100% com TABELA_CST —
++--     ou seja, a lógica de validarDeclaracao() está confirmada correta.
++--
++-- O QUE ESTE SEED NÃO TRAZ (e por quê):
++--   · perc_reducao_ibs / perc_reducao_cbs, ind_* e tipo_aliquota ficam NULL:
++--     essas colunas existem no portal mas NÃO vieram no CSV exportado. Sem
++--     elas não dá para calcular redução a partir do cClassTrib — continua
++--     valendo a alíquota do regime. É lacuna de dado, não de código.
++--   · vigencia_inicio / vigencia_fim ficam NULL: confirmado na pesquisa que
++--     a coluna dIniVig/dFimVig NÃO EXISTE na fonte para cClassTrib e CST
++--     (todas as 164 linhas vêm com "Não localizado em documentação oficial").
++-- ============================================================================
++
++-- ----------------------------------------------------------------------------
++-- 1. Alinhar a descrição de dois CSTs ao texto oficial do portal.
++-- Só texto: os indicadores já estavam corretos.
++-- ----------------------------------------------------------------------------
++UPDATE cst_ibscbs SET descricao = 'Tributação com alíquotas uniformes'          WHERE codigo = '010';
++UPDATE cst_ibscbs SET descricao = 'Tributação com alíquotas uniformes reduzidas' WHERE codigo = '011';
++
++-- ----------------------------------------------------------------------------
++-- 2. cClassTrib — 164 códigos oficiais.
++-- `artigo_lc214` e `url_dispositivo` vêm da coluna `artigo_legal` do CSV,
++-- que traz "Art. N da LC 214/2025 - <url do Planalto>" — separados aqui.
++-- ----------------------------------------------------------------------------
++INSERT INTO cclasstrib_ibscbs (codigo, cst, descricao, artigo_lc214, url_dispositivo) VALUES
++  ('000001', '000', 'Situações tributadas integralmente pelo IBS e CBS.', 'Art. 4º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art4'),
++  ('000002', '000', 'Exploração de via', 'Art. 11 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art11'),
++  ('000003', '000', 'Regime automotivo - projetos incentivados (art. 311)', 'Art. 311 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art311'),
++  ('000004', '000', 'Regime automotivo - projetos incentivados (art. 312)', 'Art. 312 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art312'),
++  ('000005', '000', 'Operação com EAC destinado à mistura com gasolina A, mas com saída do biocombustível com destinação diversa', 'Art. 179 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art179'),
++  ('010001', '010', 'Operações do FGTS não realizadas pela Caixa Econômica Federal', 'Art. 212 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art212'),
++  ('010002', '010', 'Operações do serviço financeiro', 'Art. 233 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art233'),
++  ('011001', '011', 'Planos de assistência funerária.', 'Art. 236 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art236'),
++  ('011002', '011', 'Planos de assistência à saúde', 'Art. 237 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art237'),
++  ('011003', '011', 'Intermediação de planos de assistência à saúde', 'Art. 240 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art240'),
++  ('011004', '011', 'Concursos e prognósticos', 'Art. 246 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art246'),
++  ('011005', '011', 'Planos de assistência à saúde de animais domésticos', 'Art. 243 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art243'),
++  ('200001', '200', 'Serviços de transporte de bens até as zonas de processamento de exportação e bens exportados a partir das zonas de processamento de exportação', 'Art. 103 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art103'),
++  ('200002', '200', 'Fornecimento ou importação para produtor rural não contribuinte ou TAC', 'Art. 110 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art110'),
++  ('200003', '200', 'Vendas de produtos destinados à alimentação humana (Anexo I)', 'Art. 125 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art125'),
++  ('200004', '200', 'Fornecimento de dispositivos médicos (Anexo XII)', 'Art. 144 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art144'),
++  ('200005', '200', 'Fornecimento de dispositivos médicos para órgãos da administração pública e entidades de saúde imunes (Anexo IV)', 'Art. 144 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art144'),
++  ('200006', '200', 'Situação de emergência de saúde pública reconhecida pelo Poder público', 'Art. 144 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art144'),
++  ('200007', '200', 'Fornecimento dos dispositivos de acessibilidade próprios para pessoas com deficiência (Anexo XIII)', 'Art. 145 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art145'),
++  ('200008', '200', 'Fornecimento dos dispositivos de acessibilidade próprios para pessoas com deficiência adquiridos por órgãos da administração pública (Anexo V)', 'Art. 145 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art145'),
++  ('200009', '200', 'Fornecimento dos medicamentos registrados na Anvisa', 'Art. 146 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art146'),
++  ('200010', '200', 'Fornecimento dos medicamentos registrados na Anvisa, adquiridos por órgãos da administração pública', 'Art. 146 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art146'),
++  ('200011', '200', 'Fornecimento das composições para nutrição enteral e parenteral quando adquiridas por órgãos da administração pública (Anexo VI)', 'Art. 146 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art146'),
++  ('200012', '200', 'Situação de emergência de saúde pública reconhecida pelo Poder público', 'Art. 146 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art146'),
++  ('200013', '200', 'Fornecimento de tampões higiênicos, absorventes higiênicos internos ou externos', 'Art. 147 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art147'),
++  ('200014', '200', 'Fornecimento dos produtos hortícolas, frutas e ovos (Anexo XV)', 'Art. 148 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art148'),
++  ('200015', '200', 'Venda de automóveis de passageiros de fabricação nacional adquiridos por motoristas profissionais ou pessoas com deficiência', 'Art. 149 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art149'),
++  ('200016', '200', 'Prestação de serviços de pesquisa e desenvolvimento por Instituição Científica, Tecnológica e de Inovação (ICT)', 'Art. 156 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art156'),
++  ('200017', '200', 'Operações relacionadas ao FGTS', 'Art. 212 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art212'),
++  ('200018', '200', 'Operações de resseguro e retrocessão', 'Art. 223 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art223'),
++  ('200019', '200', 'Importador dos serviços financeiros contribuinte', 'Art. 231 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art231'),
++  ('200020', '200', 'Operação praticada por sociedades cooperativas optantes por regime específico do IBS e CBS', 'Art. 271 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art271'),
++  ('200021', '200', 'Serviços de transporte público coletivo de passageiros ferroviário e hidroviário', 'Art. 285 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art285'),
++  ('200022', '200', 'Operação originada fora da ZFM que destine bem material industrializado a contribuinte estabelecido na ZFM', 'Art. 445 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art445'),
++  ('200023', '200', 'Operação realizada por indústria incentivada que destine bem material intermediário para outra indústria incentivada na ZFM', 'Art. 448 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art448'),
++  ('200024', '200', 'Operação originada fora das Áreas de Livre Comércio destinadas a contribuinte estabelecido nas Áreas de Livre Comércio', 'Art. 463 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art463'),
++  ('200025', '200', 'Fornecimento dos serviços de educação relacionados ao Programa Universidade para Todos (Prouni)', 'Art. 308 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art308'),
++  ('200026', '200', 'Locação de imóveis localizados nas zonas reabilitadas', 'Art. 158 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art158'),
++  ('200027', '200', 'Operações de locação, cessão onerosa e arrendamento de bens imóveis', 'Art. 261 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art261'),
++  ('200028', '200', 'Fornecimento dos serviços de educação (Anexo II)', 'Art. 129 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art129'),
++  ('200029', '200', 'Fornecimento dos serviços de saúde humana (Anexo III)', 'Art. 130 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art130'),
++  ('200030', '200', 'Venda dos dispositivos médicos (Anexo IV)', 'Art. 131 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art131'),
++  ('200031', '200', 'Fornecimento dos dispositivos de acessibilidade próprios para pessoas com deficiência (Anexo V)', 'Art. 132 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art132'),
++  ('200032', '200', 'Fornecimento dos medicamentos registrados na Anvisa ou produzidos por farmácias de manipulação, ressalvados os medicamentos sujeitos à alíquota zero', 'Art. 133 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art133'),
++  ('200033', '200', 'Fornecimento das composições para nutrição enteral e parenteral (Anexo VI)', 'Art. 133 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art133'),
++  ('200034', '200', 'Fornecimento dos alimentos destinados ao consumo humano (Anexo VII)', 'Art. 135 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art135'),
++  ('200035', '200', 'Fornecimento dos produtos de higiene pessoal e limpeza (Anexo VIII)', 'Art. 136 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art136'),
++  ('200036', '200', 'Fornecimento de produtos agropecuários, aquícolas, pesqueiros, florestais e extrativistas vegetais in natura', 'Art. 137 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art137'),
++  ('200037', '200', 'Fornecimento de serviços ambientais de conservação ou recuperação da vegetação nativa', 'Art. 137 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art137'),
++  ('200038', '200', 'Fornecimento dos insumos agropecuários e aquícolas (Anexo IX)', 'Art. 138 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art138'),
++  ('200039', '200', 'Fornecimento dos bens e serviços relacionados com produções nacionais artísticas, culturais, de eventos, jornalísticas e audiovisuais (Anexo X)', 'Art. 139 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art139'),
++  ('200040', '200', 'Fornecimento de serviços de comunicação institucional à administração pública', 'Art. 140 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art140'),
++  ('200041', '200', 'Fornecimento de serviço de educação desportiva (art. 141. I)', 'Art. 141 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art141'),
++  ('200042', '200', 'Fornecimento de serviço de gestão e exploração do desporto (art. 141. II)', 'Art. 141 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art141'),
++  ('200043', '200', 'Fornecimento à administração pública dos serviços e dos bens relativos à soberania (Anexo XI)', 'Art. 142 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art142'),
++  ('200044', '200', 'Operações e prestações de serviços de segurança da informação e segurança cibernética desenv por sociedade que tenha sócio brasileiro (Anexo XI)', 'Art. 142 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art142'),
++  ('200045', '200', 'Operações relacionadas a projetos de reabilitação urbana de zonas históricas e de áreas críticas de recuperação e reconversão urbanística', 'Art. 158 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art158'),
++  ('200046', '200', 'Operações com bens imóveis', 'Art. 261 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art261'),
++  ('200047', '200', 'Bares e Restaurantes', 'Art. 275 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art275'),
++  ('200048', '200', 'Hotelaria, Parques de Diversão e Parques Temáticos', 'Art. 281 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art281'),
++  ('200049', '200', 'Transporte coletivo de passageiros rodoviário, ferroviário e hidroviário', 'Art. 286 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art286'),
++  ('200050', '200', 'Serviços de transporte aéreo regional coletivo de passageiros ou de carga', 'Art. 287 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art287'),
++  ('200051', '200', 'Agências de Turismo', 'Art. 289 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art289'),
++  ('200052', '200', 'Prestação de serviços de profissões intelectuais', 'Art. 127 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art127'),
++  ('200053', '200', 'Fornecimento de medicamentos registrados na Anvisa, quando classificados como soros ou vacinas', 'Art. 146 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art146'),
++  ('200054', '200', 'Fornecimento de bem material pela cooperativa de produção agropecuária a associado não sujeito ao regime regular do IBS e da CBS', 'Art. 271 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art271'),
++  ('220001', '220', 'Incorporação imobiliária submetida ao regime especial de tributação', 'Art. 485 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art485'),
++  ('220002', '220', 'Incorporação imobiliária submetida ao regime especial de tributação', 'Art. 485 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art485'),
++  ('220003', '220', 'Alienação de imóvel decorrente de parcelamento do solo', 'Art. 486 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art486'),
++  ('221001', '221', 'Locação, cessão onerosa ou arrendamento de bem imóvel com alíquota sobre a receita bruta', 'Art. 484 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art484'),
++  ('221002', '221', 'Incorporação imobiliária submetida ao regime especial de tributação', 'Art. 485 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art485'),
++  ('221003', '221', 'Incorporação imobiliária submetida ao regime especial de tributação', 'Art. 485 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art485'),
++  ('221004', '221', 'Alienação de imóvel decorrente de parcelamento do solo', 'Art. 486 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art486'),
++  ('222001', '222', 'Transporte internacional de passageiros, caso os trechos de ida e volta sejam vendidos em conjunto', 'Art. 12 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art12'),
++  ('400001', '400', 'Fornecimento de serviços de transporte público coletivo de passageiros rodoviário e metroviário', 'Art. 157 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art157'),
++  ('400002', '400', 'Fornecimento de serviços de transporte público coletivo de passageiros rodoviário e metroviário com medição por quilômetro rodado', 'Art. 157 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art157'),
++  ('410001', '410', 'Fornecimento de bonificações quando constem no documento fiscal e que não dependam de evento posterior', 'Art. 5º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art5'),
++  ('410002', '410', 'Transferências entre estabelecimentos pertencentes ao mesmo contribuinte', 'Art. 6º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art6'),
++  ('410003', '410', 'Doações sem contraprestação em benefício do doador', 'Art. 6º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art6'),
++  ('410004', '410', 'Exportações de bens e serviços', 'Art. 8º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art8'),
++  ('410005', '410', 'Fornecimentos realizados pela União, pelos Estados, pelo Distrito Federal e pelos Municípios', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410006', '410', 'Fornecimentos realizados por entidades religiosas e templos de qualquer culto', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410007', '410', 'Fornecimentos realizados por partidos políticos, entidades sindicais e instituições de educação e de assistência social', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410008', '410', 'Fornecimentos de livros, jornais, periódicos e do papel destinado a sua impressão', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410009', '410', 'Fornecimentos de fonogramas e videofonogramas musicais produzidos no Brasil', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410010', '410', 'Fornecimentos de serviço de comunicação nas modalidades de radiodifusão sonora e de sons e imagens de recepção livre e gratuita', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410011', '410', 'Fornecimentos de ouro, quando definido em lei como ativo financeiro ou instrumento cambial', 'Art. 9º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art9'),
++  ('410012', '410', 'Fornecimento de condomínio edilício não optante pelo regime regular', 'Art. 26 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art26'),
++  ('410013', '410', 'Exportações de combustíveis', 'Art. 98 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art98'),
++  ('410014', '410', 'Fornecimento de produtor rural não contribuinte', 'Art. 164 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art164'),
++  ('410015', '410', 'Fornecimento por transportador autônomo não contribuinte', 'Art. 169 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art169'),
++  ('410016', '410', 'Fornecimento ou aquisição de resíduos sólidos', 'Art. 170 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art170'),
++  ('410017', '410', 'Aquisição de bem móvel com crédito presumido sob condição de revenda realizada', 'Art. 171 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art171'),
++  ('410018', '410', 'Operações relacionadas aos fundos garantidores e executores de políticas públicas', 'Art. 213 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art213'),
++  ('410019', '410', 'Exclusão da gorjeta na base de cálculo no fornecimento de alimentação', 'Art. 274 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art274'),
++  ('410020', '410', 'Exclusão do valor de intermediação na base de cálculo no fornecimento de alimentação', 'Art. 274 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art274'),
++  ('410021', '410', 'Contribuição de que trata o art. 149-A da Constituição Federal', 'Art. 12 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art12'),
++  ('410022', '410', 'Consolidação da propriedade do bem pelo credor', 'Art. 200 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art200'),
++  ('410023', '410', 'Alienação de bens móveis ou imóveis que tenham sido objeto de garantia em que o prestador da garantia não seja contribuinte', 'Art. 200 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art200'),
++  ('410024', '410', 'Consolidação da propriedade do bem pelo grupo de consórcio', 'Art. 204 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art204'),
++  ('410025', '410', 'Alienação de bem que tenha sido objeto de garantia em que o prestador da garantia não seja contribuinte', 'Art. 204 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art204'),
++  ('410026', '410', 'Doação com anulação de crédito', 'Art. 6º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art6'),
++  ('410027', '410', 'Exportação de serviço ou de bem imaterial', 'Art. 80 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art80'),
++  ('410028', '410', 'Operações com bens imóveis realizadas por pessoas físicas não consideradas contribuintes', 'Art. 251 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art251'),
++  ('410029', '410', 'Operações acobertadas somente pelo ICMS', 'Art. 4º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art4'),
++  ('410030', '410', 'Estorno de crédito por perecimento, deteriorização, roubo, furto ou extravio.', 'Art. 47 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art47'),
++  ('410031', '410', 'Fornecimento em período anterior ao início de vigência de incidências de CBS e IBS', 'Art. 544 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art544'),
++  ('410032', '410', 'Tributos incidentes na operação que não integram a base de cálculo do IBS e da CBS', 'Art. 12 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art12'),
++  ('410033', '410', 'Operações de Fundos de Investimento Imobiliário (FII) e Fundos de Investimento nas Cadeias Produtivas do Agronegócio (Fiagro)', 'Art. 26 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art26'),
++  ('410034', '410', 'Operações de fundos de investimento', 'Art. 26 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art26'),
++  ('410035', '410', 'Fornecimento realizado por nanoempreendedor', 'Art. 26 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art26'),
++  ('410036', '410', 'Descontos incondicionais', 'Art. 12 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art12'),
++  ('410037', '410', 'Importação de bens materiais sem incidência de IBS e CBS', 'Art. 66 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art66'),
++  ('410999', '410', 'Operações não onerosas sem previsão de tributação, não especificadas anteriormente', 'Art. 4º da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art4'),
++  ('510001', '510', 'Operações, sujeitas a diferimento, com energia elétrica, relativas à importação, geração, comercialização, distribuição e transmissão', 'Art. 28 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art28'),
++  ('515001', '515', 'Operações, sujeitas a diferimento, com insumos agropecuários e aquícolas (Anexo IX)', 'Art. 138 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art138'),
++  ('550001', '550', 'Exportações de bens materiais', 'Art. 82 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art82'),
++  ('550002', '550', 'Regime de Trânsito', 'Art. 84 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art84'),
++  ('550003', '550', 'Regimes de Depósito (art. 85)', 'Art. 85 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art85'),
++  ('550004', '550', 'Regimes de Depósito (art. 87)', 'Art. 87 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art87'),
++  ('550005', '550', 'Regimes de Depósito (art. 87, Parágrafo único)', 'Art. 87 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art87'),
++  ('550006', '550', 'Regimes de Permanência Temporária', 'Art. 88 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art88'),
++  ('550007', '550', 'Regimes de Aperfeiçoamento', 'Art. 90 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art90'),
++  ('550008', '550', 'Importação de bens para o Regime de Repetro-Temporário', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550009', '550', 'GNL-Temporário', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550010', '550', 'Repetro-Permanente', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550011', '550', 'Repetro-Industrialização', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550012', '550', 'Repetro-Nacional', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550013', '550', 'Repetro-Entreposto', 'Art. 93 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art93'),
++  ('550014', '550', 'Zona de Processamento de Exportação', 'Art. 99 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art99'),
++  ('550015', '550', 'Regime Tributário para Incentivo à Modernização e à Ampliação da Estrutura Portuária', 'Art. 105 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art105'),
++  ('550016', '550', 'Regime Especial de Incentivos para o Desenvolvimento da Infraestrutura', 'Art. 106 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art106'),
++  ('550017', '550', 'Regime Tributário para Incentivo à Atividade Econômica Naval', 'Art. 107 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art107'),
++  ('550018', '550', 'Desoneração da aquisição de bens de capital', 'Art. 109 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art109'),
++  ('550019', '550', 'Importação de bem material por indústria incentivada para utilização na ZFM', 'Art. 443 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art443'),
++  ('550020', '550', 'Áreas de livre comércio', 'Art. 461 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art461'),
++  ('550021', '550', 'Industrialização destinada a exportações', 'Art. 82 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art82'),
++  ('550022', '550', 'Regime Especial de Incentivos para a Produção de Hidrogênio de Baixa Emissão de Carbono (Rehidro)', 'Art. 106 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art106'),
++  ('550023', '550', 'Operações com hidrocarbonetos líquidos derivados de petróleo não combustíveis ou de gás natural, inclusive nafta', 'Art. 172 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art172'),
++  ('550024', '550', 'Regime Tributário para Incentivo à Atividade Naval - Renaval (Art. 107, II)', 'Art. 107 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art107'),
++  ('550025', '550', 'Regime Tributário para Incentivo à Atividade Naval - Renaval (Art. 107, III)', 'Art. 107 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art107'),
++  ('620001', '620', 'Tributação monofásica sobre combustíveis', 'Art. 172 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art172'),
++  ('620002', '620', 'Tributação monofásica com responsabilidade pela retenção sobre combustíveis', 'Art. 178 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art178'),
++  ('620003', '620', 'Tributação monofásica com responsabilidade de retenção de tributos por terceiros', 'Art. 178 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art178'),
++  ('620004', '620', 'Tributação monofásica sobre mistura de EAC com gasolina A em percentual superior ao obrigatório', 'Art. 179 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art179'),
++  ('620005', '620', 'Tributação monofásica sobre mistura de EAC com gasolina A em percentual inferior ao obrigatório', 'Art. 179 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art179'),
++  ('620006', '620', 'Tributação monofásica sobre combustíveis cobrada anteriormente', 'Art. 180 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art180'),
++  ('620007', '620', 'Perecimento, deteriorização, roubo, furto ou extravio no regime monofásico', 'Art. 47 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art47'),
++  ('800001', '800', 'Fusão, cisão ou incorporação', 'Art. 55 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art55'),
++  ('800002', '800', 'Transferência de crédito do associado, inclusive as cooperativas singulares', 'Art. 272 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art272'),
++  ('810001', '810', 'Crédito presumido sobre o valor apurado nos fornecimentos a partir da ZFM', 'Art. 450 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art450'),
++  ('811001', '811', 'Anulação de Crédito por Saídas Imunes/Isentas', 'Art. 51 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art51'),
++  ('811002', '811', 'Débitos de notas fiscais não processadas na apuração', 'Art. 45 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art45'),
++  ('811003', '811', 'Desenquadramento do Simples Nacional', 'Art. 41 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art41'),
++  ('820001', '820', 'Documento com informações de fornecimento de serviços de planos de assistência à saúde elencados no art. 234 da Lei Complementar nº214, de 2025', 'Art. 234 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art234'),
++  ('820002', '820', 'Documento com informações de fornecimento de serviços de planos de assinstência funerária', 'Art. 236 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art236'),
++  ('820003', '820', 'Documento com informações de fornecimento de serviços de planos de assistência à saúde de animais domésticos', 'Art. 243 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art243'),
++  ('820004', '820', 'Documento com informações de prestação de serviços de consursos de prognósticos', 'Art. 248 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art248'),
++  ('820005', '820', 'Documento com informações de alienação de bens imóveis', 'Art. 254 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art254'),
++  ('820006', '820', 'Documento com informações de fornecimento de serviços de exploração de via', 'Art. 11 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art11'),
++  ('820007', '820', 'Documento com informações de fornecimento de serviços financeiros', 'Art. 181 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art181'),
++  ('820008', '820', 'Documento com informações de fornecimento de serviço continuado, mas com tributação realizada em fatura anterior', 'Art. 10 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art10'),
++  ('820009', '820', 'Cobrança relativa a fornecimentos declarados em outro documento', 'Art. 60 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art60'),
++  ('830001', '830', 'Documento com exclusão da BC da CBS e do IBS de energia elétrica fornecida pela distribuidora à UC', 'Art. 28 da LC 214/2025', 'https://www.planalto.gov.br/ccivil_03/leis/lcp/lcp214.htm#art28')
++ON CONFLICT (codigo) DO NOTHING;
++
++-- ----------------------------------------------------------------------------
++-- 3. cCredPres — 13 códigos de crédito presumido.
++--
++-- DUAS RESSALVAS DA PESQUISA, registradas aqui para não se perderem:
++--   · O portal exibe os códigos como inteiros (1-13), mas a NT SE/CGNFS-e 004
++--     define `cCredPres` como campo de 2 DÍGITOS. Gravamos com zero à
++--     esquerda ('01'..'13'), que é o que o XML deve levar — mas o
++--     zero-padding NÃO foi confirmado literalmente na norma.
++--   · A vigência é POR TRIBUTO (IBS e CBS têm início/fim independentes), não
++--     um par único por código. Como a fonte entrega isso em texto livre
++--     (ex.: "Não aplicável a IBS / 2027-01-01 (CBS)"), guardamos o texto
++--     bruto em vez de forçar uma data que distorceria o dado.
++--   · A atribuição "Anexo IV do IT 2025.002" NÃO foi confirmada: no portal
++--     esta é uma tabela separada.
++-- ----------------------------------------------------------------------------
++CREATE TABLE IF NOT EXISTS ccredpres_ibscbs (
++  codigo            TEXT PRIMARY KEY CHECK (codigo ~ '^[0-9]{2}$'),
++  descricao         TEXT NOT NULL,
++  vigencia_inicio_bruto TEXT,
++  vigencia_fim_bruto    TEXT,
++  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
++);
++
++COMMENT ON TABLE ccredpres_ibscbs IS
++  'Códigos de crédito presumido IBS/CBS (13). Fonte: Portal da Conformidade '
++  'Fácil (SVRS/ENCAT), Tabela de Crédito Presumido, extração de 05/08/2026. '
++  'Vigência é por tributo (IBS e CBS independentes) e vem em texto livre.';
++
++ALTER TABLE ccredpres_ibscbs ENABLE ROW LEVEL SECURITY;
++DROP POLICY IF EXISTS sel_ccredpres_ibscbs ON ccredpres_ibscbs;
++CREATE POLICY sel_ccredpres_ibscbs ON ccredpres_ibscbs FOR SELECT TO authenticated USING (true);
++REVOKE ALL ON TABLE ccredpres_ibscbs FROM anon;
++
++INSERT INTO ccredpres_ibscbs (codigo, descricao, vigencia_inicio_bruto, vigencia_fim_bruto) VALUES
++  ('01', 'Crédito presumido da aquisição de bens e serviços de produtor rural e produtor rural integrado não contribuinte, observado o art. 168 da Lei Complementar nº 214, de 2025. [Aplicável a IBS e CBS; ApropriaDFE=Sim; ApropriaEvento=Sim; DeduzCréditoPresumido=Não]', '2027-01-01', 'Indeterminado'),
++  ('02', 'Crédito presumido da aquisição de serviço de transportador autônomo de carga pessoa física não contribuinte, observado o art. 169 da Lei Complementar nº 214, de 2025. [Aplicável a IBS e CBS; ApropriaDFE=Não; ApropriaEvento=Sim; DeduzCréditoPresumido=Não]', '2027-01-01', 'Indeterminado'),
++  ('03', 'Crédito presumido da aquisição de resíduos e demais materiais destinados à reciclagem, reutilização ou logística reversa adquiridos de pessoa física, cooperativa ou outra forma de organização popular, observado o art. 170 da Lei Complementar nº 214, de 2025. [ApropriaDFE=Sim; ApropriaEvento=Sim; DeduzCréditoPresumido=Não; CBS: início 01/01/2027]', '2029-01-01', 'Indeterminado'),
++  ('04', 'Crédito presumido da aquisição de bens móveis usados de pessoa física não contribuinte para revenda, observado o art. 171 da Lei Complementar nº 214, de 2025. [Aplicável a IBS e CBS; ApropriaDFE=Sim; ApropriaEvento=Sim; DeduzCréditoPresumido=Sim]', '2027-01-01', 'Indeterminado'),
++  ('05', 'Crédito presumido no regime automotivo, observado o art. 311 da Lei Complementar nº 214, de 2025. [IBS: não aplicável; CBS: aplicável, início 01/01/2027, fim Indeterminado; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Não]', 'Não aplicável a IBS / 2027-01-01 (CBS)', 'Indeterminado (CBS)'),
++  ('06', 'Crédito presumido no regime automotivo, observado o art. 312 da Lei Complementar nº 214, de 2025. [IBS: não aplicável; CBS: aplicável, início 01/01/2027, fim Indeterminado; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Não]', 'Não aplicável a IBS / 2027-01-01 (CBS)', 'Indeterminado (CBS)'),
++  ('07', 'Crédito presumido na aquisição por contribuinte na Zona Franca de Manaus, observado o art. 444 da Lei Complementar nº 214, de 2025. [IBS: aplicável, início 01/01/2027, fim Indeterminado; CBS: não aplicável; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Sim]', '2027-01-01', 'Indeterminado'),
++  ('08', 'Crédito presumido na aquisição por contribuinte na Zona Franca de Manaus, observado o art. 447 da Lei Complementar nº 214, de 2025. [IBS: aplicável, início Não informado, fim Indeterminado; CBS: não aplicável; ApropriaDFE=Não; ApropriaEvento=Sim; DeduzCréditoPresumido=Não]', 'Não localizado em documentação oficial (IBS: início não informado pela fonte)', 'Indeterminado'),
++  ('09', 'Crédito presumido na aquisição por contribuinte na Zona Franca de Manaus, observado o art. 449 da Lei Complementar nº 214, de 2025. [IBS: aplicável, início 01/01/2029, fim Indeterminado; CBS: não aplicável; ApropriaDFE=Não; ApropriaEvento=Sim; DeduzCréditoPresumido=Não]', '2029-01-01', 'Indeterminado'),
++  ('10', 'Crédito presumido na aquisição por contribuinte na Zona Franca de Manaus, observado o art. 450 da Lei Complementar nº 214, de 2025. [IBS: não aplicável; CBS: aplicável, início 01/01/2027, fim Indeterminado; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Não]', 'Não aplicável a IBS / 2027-01-01 (CBS)', 'Indeterminado (CBS)'),
++  ('11', 'Crédito presumido na aquisição por contribuinte na Área de Livre Comércio, observado o art. 462 da Lei Complementar nº 214, de 2025. [IBS: aplicável, início 01/01/2027, fim Indeterminado; CBS: não aplicável; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Sim]', '2027-01-01', 'Indeterminado'),
++  ('12', 'Crédito presumido na aquisição por contribuinte na Área de Livre Comércio, observado o art. 465 da Lei Complementar nº 214, de 2025. [IBS: aplicável, início 01/01/2029, fim Indeterminado; CBS: não aplicável; ApropriaDFE=Não; ApropriaEvento=Sim; DeduzCréditoPresumido=Não]', '2029-01-01', 'Indeterminado'),
++  ('13', 'Crédito presumido na aquisição pela indústria na Área de Livre Comércio, observado o art. 467 da Lei Complementar nº 214, de 2025. [IBS: não aplicável; CBS: aplicável, início 01/01/2027, fim Indeterminado; ApropriaDFE=Sim; ApropriaEvento=Não; DeduzCréditoPresumido=Não]', 'Não aplicável a IBS / 2027-01-01 (CBS)', 'Indeterminado (CBS)')
++ON CONFLICT (codigo) DO NOTHING;
+-- 
+2.43.0
+

@@ -1,0 +1,1066 @@
+From cc7d492b8a11debbc7e3f89e0d42765454f20991 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Wed, 5 Aug 2026 20:03:08 +0000
+Subject: [PATCH 4/4] feat(fiscal): modelagem do grupo IBSCBS + tabela de
+ dominio CST/cClassTrib (C5)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Implementa o item C5 a partir de `ibscbs_modelagem_tecnica.md`, que consolida
+as NT SE/CGNFS-e 004 v2.00, 007, 008 e 009 e a extracao ao vivo das tabelas
+oficiais no Portal da Conformidade Facil (SVRS/ENCAT), 05/08/2026.
+
+Tres decisoes estruturais que vem da fonte, nao de preferencia:
+
+1. Na NFS-e o grupo IBSCBS existe em DOIS lugares com semanticas diferentes:
+   o que o prestador DECLARA na DPS e o que o Ambiente de Dados Nacional
+   CALCULA e devolve. Nos declaramos CST/cClassTrib; quem aplica aliquota e
+   devolve valor e o Ambiente Nacional. Por isso DeclaracaoTributariaIBSCBS e
+   ResultadoCalculoIBSCBS sao tipos separados, e o resultado e dado de
+   auditoria — persistir, nunca recalcular.
+
+2. CST e cClassTrib sao string validada contra TABELA DE DOMINIO, nunca union
+   type fechado nem CREATE TYPE. Sao vocabulario de terceiro, mantido por Nota
+   Tecnica: a propria pesquisa achou fontes divergindo sobre se o CST 220 foi
+   removido (esta ativo, com 3 cClassTrib — venceu a extracao ao vivo). Enum
+   fechado exigiria deploy a cada Nota Tecnica. Excecao consciente a regra 17.
+
+3. O enum RegimeIbsCbs de reforma.ts NAO e campo do XML. Continua valido como
+   intencao de negocio (elegibilidade, previa na UI) mas nao substitui
+   CST/cClassTrib.
+
+src/lib/fiscal/ibscbs.ts (novo)
+- TABELA_CST: os 18 codigos completos com os indicadores que determinam quais
+  subgrupos do XML sao obrigatorios/vedados por CST.
+- Tipos da declaracao e do resultado calculado, schemas Zod, e os codigos
+  opSimpNac/regApIBSCBSSN da NT-009 — que trazem o REGIME HIBRIDO do Simples
+  (CBS pelo SN e IBS pelo regime regular ao mesmo tempo). O simples_por_fora
+  booleano de hoje nao representa isso: e uma dimensao a mais, nao a mesma.
+- aliquotaEfetiva(): pAliqEfet = pAliq x (1 - pRedAliq) x (1 - pRedutor),
+  formula confirmada por transcricao literal da NT-004. Composta, nao somada.
+- validarDeclaracao(): so as regras CONFIRMADAS (secao 3.3) — prefixo do
+  cClassTrib igual ao CST, gDif obrigatorio em 510/515 e vedado nos demais,
+  coerencia de gTribRegular. FALHA FECHADA se o cClassTrib nao estiver na
+  tabela de dominio: melhor recusar a emissao do que declarar enquadramento
+  tributario inventado.
+- PENDENCIAS_C5: as 7 lacunas que a pesquisa deixou explicitas, em codigo,
+  para que ninguem as trate como resolvidas.
+
+supabase/migrations/20260805180000_ibscbs_dominio.sql
+- cst_ibscbs: 18 codigos seedados (tabela completa).
+- cclasstrib_ibscbs: CRIADA VAZIA de proposito. A pesquisa confirmou a
+  contagem (164) e a distribuicao por CST, mas nao trouxe as 164 linhas.
+  Semear parcialmente uma tabela de enquadramento fiscal seria pior que
+  deixa-la vazia — alguem leria as poucas linhas como se fossem a tabela
+  inteira. CHECK de banco garante que os 3 primeiros digitos batem com o CST.
+- view cclasstrib_conferencia: compara o importado com a contagem oficial por
+  CST, para que a importacao seja verificavel em vez de "parece que deu certo".
+- RLS: dados de referencia nacional, leitura para authenticated, escrita so por
+  migration/service_role, anon revogado.
+
+src/lib/fiscal/provider.ts — EmitirNfseInput.servico.reforma ganha `declaracao`
+e `intencao` OPCIONAIS; EmitirNfseResult ganha `resultadoCalculado`. Opcionais
+porque nao ha data confirmada de obrigatoriedade de PREENCHIMENTO do grupo na
+NFS-e (o Ato Conjunto 4/2026 rege a obrigatoriedade de EMISSAO do documento) e
+a NF-e teve as datas de producao suspensas na NT 2025.002 v1.51. E flag, nao
+calendario. Motor de retry nao foi tocado.
+
+src/lib/fiscal/providers/focusnfe.ts — quando ha declaracao, envia o cClassTrib
+em ibs_cbs_classificacao_tributaria. Os 3 primeiros digitos do cClassTrib SAO o
+CST, entao um campo carrega os dois — nao inventamos nome de campo que a
+documentacao da Focus nao expoe. Declaracao incoerente = erro PERMANENTE antes
+do envio: a nota nem chega a tocar a prefeitura.
+
+28 testes novos (138 no total, eram 110). Verificacao das migrations: as 5
+aplicadas do zero num Postgres 16 limpo — 18 CSTs seedados, conferencia
+mostrando 164 esperados / 0 importados, CHECK de prefixo e FK recusando codigo
+incoerente, e reaplicacao sem erro (idempotente).
+
+DoD: typecheck OK, lint OK, test OK (138), build OK.
+---
+ src/lib/fiscal/ibscbs.test.ts                 | 222 +++++++++++
+ src/lib/fiscal/ibscbs.ts                      | 352 ++++++++++++++++++
+ src/lib/fiscal/provider.ts                    |  32 +-
+ src/lib/fiscal/providers/focusnfe.test.ts     |  74 ++++
+ src/lib/fiscal/providers/focusnfe.ts          |  36 +-
+ .../20260805180000_ibscbs_dominio.sql         | 169 +++++++++
+ 6 files changed, 876 insertions(+), 9 deletions(-)
+ create mode 100644 src/lib/fiscal/ibscbs.test.ts
+ create mode 100644 src/lib/fiscal/ibscbs.ts
+ create mode 100644 supabase/migrations/20260805180000_ibscbs_dominio.sql
+
+diff --git a/src/lib/fiscal/ibscbs.test.ts b/src/lib/fiscal/ibscbs.test.ts
+new file mode 100644
+index 0000000..0e4641d
+--- /dev/null
++++ b/src/lib/fiscal/ibscbs.test.ts
+@@ -0,0 +1,222 @@
++import { describe, it, expect } from "vitest";
++import {
++  CCLASSTRIB_ESPERADOS_POR_CST,
++  OP_SIMP_NAC,
++  PENDENCIAS_C5,
++  REG_AP_IBSCBS_SN,
++  TABELA_CST,
++  TOTAL_CCLASSTRIB_ESPERADO,
++  aliquotaEfetiva,
++  buscarCst,
++  declaracaoIbsCbsSchema,
++  validarDeclaracao,
++  type DeclaracaoTributariaIBSCBS,
++} from "@/lib/fiscal/ibscbs";
++
++// ---------------------------------------------------------------------------
++// Tabela CST — a informação de maior confiança da pesquisa (extração ao vivo
++// do portal SVRS). Estes testes travam o conteúdo: se alguém editar a tabela
++// sem passar por uma Nota Técnica, o teste quebra e obriga a justificar.
++// ---------------------------------------------------------------------------
++
++describe("tabela CST-IBS/CBS", () => {
++  it("tem exatamente os 18 códigos oficiais", () => {
++    expect(TABELA_CST).toHaveLength(18);
++    expect(TABELA_CST.map((c) => c.codigo)).toEqual([
++      "000", "010", "011", "200", "220", "221", "222", "400", "410",
++      "510", "515", "550", "620", "800", "810", "811", "820", "830",
++    ]);
++  });
++
++  it("mantém o CST 220 ativo (conflito de fontes resolvido na seção 4 da pesquisa)", () => {
++    // Uma fonte secundária dizia que a v1.60 excluiu o 220; a extração ao vivo
++    // do portal SVRS mostra ele ativo, com 3 cClassTrib. Vale a fonte primária.
++    expect(buscarCst("220")).not.toBeNull();
++    expect(CCLASSTRIB_ESPERADOS_POR_CST["220"]).toBe(3);
++  });
++
++  it("marca corretamente quais CSTs exigem tributação", () => {
++    const exigem = TABELA_CST.filter((c) => c.exigeTributacao).map((c) => c.codigo);
++    expect(exigem).toEqual([
++      "000", "010", "011", "200", "220", "221", "222", "510", "515", "550", "830",
++    ]);
++  });
++
++  it("liga cada indicador de subgrupo ao CST certo (seção 3.3)", () => {
++    expect(TABELA_CST.filter((c) => c.diferimento).map((c) => c.codigo)).toEqual(["510", "515"]);
++    expect(TABELA_CST.filter((c) => c.monofasica).map((c) => c.codigo)).toEqual(["620"]);
++    expect(TABELA_CST.filter((c) => c.transfCredito).map((c) => c.codigo)).toEqual(["800"]);
++    expect(TABELA_CST.filter((c) => c.credPresZfm).map((c) => c.codigo)).toEqual(["810"]);
++    expect(TABELA_CST.filter((c) => c.ajusteCompetencia).map((c) => c.codigo)).toEqual(["811"]);
++    // ind_gRed cobre redução de BC ou de alíquota: {011, 200, 222, 515}
++    expect(
++      TABELA_CST.filter((c) => c.redAliquota || c.redBaseCalculo).map((c) => c.codigo),
++    ).toEqual(["011", "200", "222", "515"]);
++  });
++
++  it("a contagem de cClassTrib por CST soma os 164 oficiais", () => {
++    const soma = Object.values(CCLASSTRIB_ESPERADOS_POR_CST).reduce((a, b) => a + b, 0);
++    expect(soma).toBe(TOTAL_CCLASSTRIB_ESPERADO);
++    expect(soma).toBe(164);
++  });
++
++  it("todo CST da tabela tem contagem de cClassTrib, e vice-versa", () => {
++    expect(Object.keys(CCLASSTRIB_ESPERADOS_POR_CST).sort()).toEqual(
++      TABELA_CST.map((c) => c.codigo).sort(),
++    );
++  });
++
++  it("buscarCst devolve null para código inexistente", () => {
++    expect(buscarCst("999")).toBeNull();
++    expect(buscarCst("")).toBeNull();
++  });
++});
++
++// ---------------------------------------------------------------------------
++// Schema
++// ---------------------------------------------------------------------------
++
++describe("declaracaoIbsCbsSchema", () => {
++  it("exige CST de 3 dígitos e cClassTrib de 6", () => {
++    expect(() => declaracaoIbsCbsSchema.parse({ cst: "00", cClassTrib: "000001" })).toThrow();
++    expect(() => declaracaoIbsCbsSchema.parse({ cst: "000", cClassTrib: "00001" })).toThrow();
++    expect(() => declaracaoIbsCbsSchema.parse({ cst: "abc", cClassTrib: "000001" })).toThrow();
++  });
++
++  it("aceita uma declaração mínima válida", () => {
++    const d = declaracaoIbsCbsSchema.parse({ cst: "000", cClassTrib: "000001" });
++    expect(d.cst).toBe("000");
++  });
++});
++
++// ---------------------------------------------------------------------------
++// Validação estrutural
++// ---------------------------------------------------------------------------
++
++function decl(over: Partial<DeclaracaoTributariaIBSCBS> = {}): DeclaracaoTributariaIBSCBS {
++  return { cst: "000", cClassTrib: "000001", ...over };
++}
++
++describe("validarDeclaracao", () => {
++  it("aprova uma declaração coerente", () => {
++    expect(validarDeclaracao(decl())).toEqual({ valido: true, erros: [] });
++  });
++
++  it("recusa CST fora da tabela oficial", () => {
++    const r = validarDeclaracao(decl({ cst: "999", cClassTrib: "999001" }));
++    expect(r.valido).toBe(false);
++    expect(r.erros.join(" ")).toContain("não existe na tabela");
++  });
++
++  it("recusa cClassTrib cujo prefixo não repete o CST", () => {
++    const r = validarDeclaracao(decl({ cst: "200", cClassTrib: "000027" }));
++    expect(r.valido).toBe(false);
++    expect(r.erros.join(" ")).toContain("os 3 primeiros dígitos");
++  });
++
++  it("exige diferimento em CST 510 e 515", () => {
++    expect(validarDeclaracao(decl({ cst: "510", cClassTrib: "510001" })).valido).toBe(false);
++    expect(validarDeclaracao(decl({ cst: "515", cClassTrib: "515001" })).valido).toBe(false);
++
++    const ok = validarDeclaracao(
++      decl({
++        cst: "510",
++        cClassTrib: "510001",
++        diferimento: { percentualUf: 1, percentualMun: 1, percentualCbs: 0 },
++      }),
++    );
++    expect(ok.valido).toBe(true);
++  });
++
++  it("recusa diferimento em CST que não admite", () => {
++    const r = validarDeclaracao(
++      decl({ diferimento: { percentualUf: 0.5, percentualMun: null, percentualCbs: null } }),
++    );
++    expect(r.valido).toBe(false);
++    expect(r.erros.join(" ")).toContain("não admite grupo de diferimento");
++  });
++
++  it("valida a coerência interna de gTribRegular", () => {
++    const bom = validarDeclaracao(
++      decl({ tribRegular: { cstRegular: "000", cClassTribRegular: "000001" } }),
++    );
++    expect(bom.valido).toBe(true);
++
++    const ruim = validarDeclaracao(
++      decl({ tribRegular: { cstRegular: "000", cClassTribRegular: "200027" } }),
++    );
++    expect(ruim.valido).toBe(false);
++    expect(ruim.erros.join(" ")).toContain("cClassTrib regular");
++  });
++
++  // A trava que impede declarar um enquadramento que não sabemos se existe.
++  it("falha fechada quando o cClassTrib não está na tabela de domínio", () => {
++    const vazia = new Set<string>();
++    const r = validarDeclaracao(decl(), { cClassTribConhecidos: vazia });
++    expect(r.valido).toBe(false);
++    expect(r.erros.join(" ")).toContain("não está na tabela de domínio");
++
++    const populada = new Set(["000001"]);
++    expect(validarDeclaracao(decl(), { cClassTribConhecidos: populada }).valido).toBe(true);
++  });
++
++  it("acumula todos os erros em vez de parar no primeiro", () => {
++    const r = validarDeclaracao(
++      decl({
++        cst: "999",
++        cClassTrib: "000001",
++        tribRegular: { cstRegular: "888", cClassTribRegular: "111111" },
++      }),
++    );
++    expect(r.erros.length).toBeGreaterThanOrEqual(3);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// Alíquota efetiva e códigos do Simples Nacional
++// ---------------------------------------------------------------------------
++
++describe("aliquotaEfetiva", () => {
++  // pAliqEfet = pAliqOriginal × (1 − pRedAliq) × (1 − pRedutor) — NT-004,
++  // confirmada por transcrição literal.
++  it("sem redução, devolve a alíquota original", () => {
++    expect(aliquotaEfetiva(0.009, 0)).toBeCloseTo(0.009, 10);
++  });
++
++  it("aplica redução de 60%", () => {
++    expect(aliquotaEfetiva(0.1, 0.6)).toBeCloseTo(0.04, 10);
++  });
++
++  it("aplica redução e redutor de compra governamental de forma composta", () => {
++    // 0.1 × (1 − 0.6) × (1 − 0.5) = 0.02 — composto, não somado
++    expect(aliquotaEfetiva(0.1, 0.6, 0.5)).toBeCloseTo(0.02, 10);
++  });
++
++  it("redução de 100% zera a alíquota", () => {
++    expect(aliquotaEfetiva(0.1, 1)).toBe(0);
++  });
++});
++
++describe("Simples Nacional (NT-009)", () => {
++  it("opSimpNac usa os códigos 1..4 da tabela oficial", () => {
++    expect(OP_SIMP_NAC).toEqual({
++      nao_optante: 1,
++      mei: 2,
++      me_epp: 3,
++      optante_pendente: 4,
++    });
++  });
++
++  it("regApIBSCBSSN contempla o regime híbrido (CBS pelo SN, IBS pelo regular)", () => {
++    expect(REG_AP_IBSCBS_SN.cbs_sn_ibs_regular).toBe(2);
++    expect(Object.keys(REG_AP_IBSCBS_SN)).toHaveLength(3);
++  });
++});
++
++describe("pendências do C5", () => {
++  it("estão declaradas em código para não serem tratadas como resolvidas", () => {
++    expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(7);
++    expect(PENDENCIAS_C5.join(" ")).toContain("164");
++    expect(PENDENCIAS_C5.join(" ")).toContain("contador");
++  });
++});
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+new file mode 100644
+index 0000000..6228c42
+--- /dev/null
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -0,0 +1,352 @@
++/**
++ * Domínio tributário do grupo IBSCBS (Reforma Tributária — LC 214/2025).
++ * Item C5 da auditoria.
++ *
++ * Fonte: `ibscbs_modelagem_tecnica.md` (pesquisa de ago/2026), que consolida as
++ * NT SE/CGNFS-e 004 v2.00, 007, 008 e 009 e a extração ao vivo das tabelas
++ * CST-IBS/CBS e cClassTrib do Portal da Conformidade Fácil (SVRS/ENCAT).
++ *
++ * TRÊS DECISÕES ESTRUTURAIS QUE VÊM DA FONTE, NÃO DE PREFERÊNCIA:
++ *
++ * 1. Na NFS-e o grupo IBSCBS existe em DOIS lugares com semânticas diferentes:
++ *    o que o prestador DECLARA na DPS (`DeclaracaoTributariaIBSCBS`) e o que o
++ *    Ambiente de Dados Nacional CALCULA e devolve (`ResultadoCalculoIBSCBS`).
++ *    Nós declaramos CST/cClassTrib/base; quem aplica alíquota e devolve valor é
++ *    o Ambiente Nacional. Por isso os dois tipos são separados, e por isso o
++ *    valor calculado é dado de auditoria — não recalculamos localmente.
++ *
++ * 2. CST e cClassTrib são `string` validada contra TABELA DE DOMÍNIO, nunca
++ *    union type fechado. São 18 e 164 códigos hoje, mantidos por Nota Técnica —
++ *    a própria pesquisa encontrou fontes divergindo sobre se o CST 220 foi
++ *    removido. Enum fechado exigiria deploy a cada mudança de tabela.
++ *
++ * 3. O enum `RegimeIbsCbs` que já existe em `reforma.ts` NÃO é campo do XML.
++ *    Ele continua válido como INTENÇÃO DE NEGÓCIO (elegibilidade, prévia de
++ *    valor na UI), mas não substitui CST/cClassTrib. O mapeamento
++ *    negócio → código fiscal é decisão contábil e ainda não existe — ver
++ *    `PENDENCIAS_C5` no fim deste arquivo.
++ */
++
++import { z } from "zod";
++import { type RegimeIbsCbs } from "./reforma";
++
++// ---------------------------------------------------------------------------
++// Tabela CST-IBS/CBS — 18 códigos
++//
++// Extraída ao vivo do DOM do Portal da Conformidade Fácil (SVRS/ENCAT) em
++// 05/08/2026 — dado primário, a informação de maior confiança da pesquisa.
++// O portal cobre 17 tipos de DF-e, NF-e e NFS-e INCLUÍDOS: é a mesma tabela
++// de domínio para os dois documentos.
++//
++// Espelhada na migration `..._ibscbs_dominio.sql` (tabela `cst_ibscbs`). Aqui
++// ela existe para validação em memória, sem I/O — o banco é a fonte para
++// consulta/relatório, este objeto é a trava barata no caminho da emissão.
++// ---------------------------------------------------------------------------
++
++export interface DefinicaoCst {
++  readonly codigo: string;
++  readonly descricao: string;
++  /** Quando false, a operação não é tributada (isenção, imunidade, monofasia...). */
++  readonly exigeTributacao: boolean;
++  readonly redBaseCalculo: boolean;
++  readonly redAliquota: boolean;
++  readonly transfCredito: boolean;
++  readonly diferimento: boolean;
++  readonly monofasica: boolean;
++  readonly credPresZfm: boolean;
++  readonly ajusteCompetencia: boolean;
++}
++
++export const TABELA_CST: readonly DefinicaoCst[] = [
++  m("000", "Tributação integral", { exigeTributacao: true }),
++  m("010", "Alíquotas uniformes", { exigeTributacao: true }),
++  m("011", "Alíquotas uniformes reduzidas", { exigeTributacao: true, redAliquota: true }),
++  m("200", "Alíquota reduzida", { exigeTributacao: true, redAliquota: true }),
++  m("220", "Alíquota fixa", { exigeTributacao: true }),
++  m("221", "Alíquota fixa proporcional", { exigeTributacao: true }),
++  m("222", "Redução de Base de Cálculo", { exigeTributacao: true, redBaseCalculo: true }),
++  m("400", "Isenção", {}),
++  m("410", "Imunidade e não incidência", {}),
++  m("510", "Diferimento", { exigeTributacao: true, diferimento: true }),
++  m("515", "Diferimento com redução de alíquota", {
++    exigeTributacao: true,
++    redAliquota: true,
++    diferimento: true,
++  }),
++  m("550", "Suspensão", { exigeTributacao: true }),
++  m("620", "Tributação Monofásica", { monofasica: true }),
++  m("800", "Transferência de crédito", { transfCredito: true }),
++  m("810", "Ajuste de IBS na ZFM", { credPresZfm: true }),
++  m("811", "Ajustes", { ajusteCompetencia: true }),
++  m("820", "Tributação em documento específico", {}),
++  m("830", "Exclusão da Base de Cálculo", { exigeTributacao: true }),
++] as const;
++
++function m(
++  codigo: string,
++  descricao: string,
++  flags: Partial<Omit<DefinicaoCst, "codigo" | "descricao">>,
++): DefinicaoCst {
++  return {
++    codigo,
++    descricao,
++    exigeTributacao: flags.exigeTributacao ?? false,
++    redBaseCalculo: flags.redBaseCalculo ?? false,
++    redAliquota: flags.redAliquota ?? false,
++    transfCredito: flags.transfCredito ?? false,
++    diferimento: flags.diferimento ?? false,
++    monofasica: flags.monofasica ?? false,
++    credPresZfm: flags.credPresZfm ?? false,
++    ajusteCompetencia: flags.ajusteCompetencia ?? false,
++  };
++}
++
++const CST_POR_CODIGO = new Map(TABELA_CST.map((c) => [c.codigo, c]));
++
++export function buscarCst(codigo: string): DefinicaoCst | null {
++  return CST_POR_CODIGO.get(codigo) ?? null;
++}
++
++/**
++ * Quantos cClassTrib cada CST tem na tabela oficial (164 no total).
++ * Usada como verificação de integridade do seed: se a importação dos 164
++ * códigos não bater com esta contagem, a importação está incompleta ou a
++ * tabela mudou de versão — nos dois casos alguém precisa olhar.
++ */
++export const CCLASSTRIB_ESPERADOS_POR_CST: Readonly<Record<string, number>> = {
++  "000": 5, "010": 2, "011": 5, "200": 54, "220": 3, "221": 4,
++  "222": 1, "400": 2, "410": 38, "510": 1, "515": 1, "550": 25,
++  "620": 7, "800": 2, "810": 1, "811": 3, "820": 9, "830": 1,
++};
++
++export const TOTAL_CCLASSTRIB_ESPERADO = 164;
++
++// ---------------------------------------------------------------------------
++// Simples Nacional — NT-009
++//
++// A reforma exige declarar o regime de apuração POR TRIBUTO: uma empresa pode
++// apurar CBS dentro do Simples e IBS pelo regime regular ao mesmo tempo (o
++// "regime híbrido" da LC 214/2025). O `simples_por_fora` booleano que o
++// projeto tem hoje não representa isso — é uma dimensão a mais, não menos.
++// ---------------------------------------------------------------------------
++
++export const SITUACAO_SIMPLES_NACIONAL = [
++  "nao_optante",
++  "mei",
++  "me_epp",
++  "optante_pendente",
++] as const;
++export type SituacaoSimplesNacional = (typeof SITUACAO_SIMPLES_NACIONAL)[number];
++
++/** Código `opSimpNac` da NT-009 (1..4), na ordem da tabela oficial. */
++export const OP_SIMP_NAC: Readonly<Record<SituacaoSimplesNacional, number>> = {
++  nao_optante: 1,
++  mei: 2,
++  me_epp: 3,
++  optante_pendente: 4,
++};
++
++export const REGIME_APURACAO_SN = [
++  "ambos_pelo_sn",
++  "cbs_sn_ibs_regular",
++  "ambos_regime_regular",
++] as const;
++export type RegimeApuracaoIbsCbsSN = (typeof REGIME_APURACAO_SN)[number];
++
++/** Código `regApIBSCBSSN` da NT-009 (1..3). */
++export const REG_AP_IBSCBS_SN: Readonly<Record<RegimeApuracaoIbsCbsSN, number>> = {
++  ambos_pelo_sn: 1,
++  cbs_sn_ibs_regular: 2,
++  ambos_regime_regular: 3,
++};
++
++// ---------------------------------------------------------------------------
++// O que o prestador DECLARA (grupo .../DPS/infDPS/IBSCBS/valores/trib/gIBSCBS)
++// ---------------------------------------------------------------------------
++
++/** CST-IBS/CBS: exatamente 3 dígitos. Existência é validada contra a tabela. */
++export const cstSchema = z.string().regex(/^\d{3}$/, "CST deve ter exatamente 3 dígitos");
++
++/**
++ * cClassTrib: exatamente 6 dígitos, e os 3 PRIMEIROS repetem o CST — regra
++ * estrutural da tabela oficial, verificada em `validarDeclaracao`.
++ */
++export const cClassTribSchema = z
++  .string()
++  .regex(/^\d{6}$/, "cClassTrib deve ter exatamente 6 dígitos");
++
++export const declaracaoIbsCbsSchema = z.object({
++  cst: cstSchema,
++  cClassTrib: cClassTribSchema,
++  /** Código de crédito presumido (Anexo IV) — tabela própria, ainda não modelada. */
++  cCredPres: z.string().regex(/^\d{2}$/).nullish(),
++  /**
++   * `gTribRegular`: "como seria a tributação regular" — exigido pela tabela de
++   * cClassTrib em operações sob condição suspensiva/resolutória.
++   */
++  tribRegular: z
++    .object({ cstRegular: cstSchema, cClassTribRegular: cClassTribSchema })
++    .nullish(),
++  /** `gDif`: percentuais de diferimento por esfera. Só cabe em CST 510 e 515. */
++  diferimento: z
++    .object({
++      percentualUf: z.number().min(0).max(1).nullish(),
++      percentualMun: z.number().min(0).max(1).nullish(),
++      percentualCbs: z.number().min(0).max(1).nullish(),
++    })
++    .nullish(),
++});
++
++export type DeclaracaoTributariaIBSCBS = z.infer<typeof declaracaoIbsCbsSchema>;
++
++/**
++ * Intenção de negócio — NÃO vai no XML. É o que a UI e as regras de
++ * elegibilidade usam para decidir qual CST/cClassTrib declarar.
++ */
++export interface IntencaoRegimeTributario {
++  regime: RegimeIbsCbs;
++  situacaoSimplesNacional: SituacaoSimplesNacional | null;
++  regimeApuracaoSN: RegimeApuracaoIbsCbsSN | null;
++}
++
++/**
++ * O que o Ambiente de Dados Nacional CALCULA e devolve (grupo
++ * `NFSe/infNFSe/IBSCBS`). Dado de auditoria: persistir, nunca recalcular.
++ * Alíquotas em fração (0.009 = 0,9%), valores em centavos (regra 15).
++ */
++export interface ResultadoCalculoIBSCBS {
++  municipioIncidencia: { codigoIbge: string; nome: string } | null;
++  baseCalculoCentavos: number;
++  ibsUf: EsferaCalculada;
++  ibsMun: EsferaCalculada;
++  cbs: EsferaCalculada;
++  ibsTotalCentavos: number;
++  cbsTotalCentavos: number;
++}
++
++export interface EsferaCalculada {
++  aliquotaParametrizada: number;
++  percentualReducao: number;
++  aliquotaEfetiva: number;
++  valorCentavos: number;
++}
++
++/**
++ * Fórmula confirmada por transcrição literal da NT-004:
++ *   pAliqEfet = pAliqOriginal × (1 − pRedAliq) × (1 − pRedutor)
++ * `pRedutor` só se aplica a compras governamentais; 0 no caso geral.
++ */
++export function aliquotaEfetiva(
++  aliquotaOriginal: number,
++  percentualReducao: number,
++  percentualRedutor = 0,
++): number {
++  return aliquotaOriginal * (1 - percentualReducao) * (1 - percentualRedutor);
++}
++
++// ---------------------------------------------------------------------------
++// Validação estrutural da declaração
++//
++// Cobre apenas as regras CONFIRMADAS pela pesquisa (seção 3.3): dependência de
++// subgrupo por CST. A regra granular obrigatório/vedado campo a campo por CST
++// está na lacuna 10 da pesquisa (documento de "Regras de Validação" não
++// acessado) — não inventamos o que não foi confirmado.
++// ---------------------------------------------------------------------------
++
++export interface ResultadoValidacao {
++  valido: boolean;
++  erros: string[];
++}
++
++const CST_COM_DIFERIMENTO = new Set(["510", "515"]);
++
++export function validarDeclaracao(
++  declaracao: DeclaracaoTributariaIBSCBS,
++  opcoes?: { cClassTribConhecidos?: ReadonlySet<string> },
++): ResultadoValidacao {
++  const erros: string[] = [];
++
++  const cst = buscarCst(declaracao.cst);
++  if (!cst) {
++    erros.push(
++      `CST "${declaracao.cst}" não existe na tabela CST-IBS/CBS (18 códigos vigentes)`,
++    );
++  }
++
++  // Regra estrutural: cClassTrib = CST (3 dígitos) + sequencial (3 dígitos).
++  if (!declaracao.cClassTrib.startsWith(declaracao.cst)) {
++    erros.push(
++      `cClassTrib "${declaracao.cClassTrib}" incompatível com o CST "${declaracao.cst}": ` +
++        `os 3 primeiros dígitos do cClassTrib devem repetir o CST`,
++    );
++  }
++
++  // Falha fechada: sem a tabela de domínio populada, não declaramos um código
++  // que não sabemos se existe. Melhor recusar a emissão do que enviar um
++  // enquadramento tributário inventado.
++  const conhecidos = opcoes?.cClassTribConhecidos;
++  if (conhecidos && !conhecidos.has(declaracao.cClassTrib)) {
++    erros.push(
++      `cClassTrib "${declaracao.cClassTrib}" não está na tabela de domínio ` +
++        `(${TOTAL_CCLASSTRIB_ESPERADO} códigos oficiais) — importe a tabela antes de emitir`,
++    );
++  }
++
++  // gDif: obrigatório em 510/515, vedado nos demais.
++  const temDiferimento =
++    declaracao.diferimento !== null && declaracao.diferimento !== undefined;
++  if (cst) {
++    if (CST_COM_DIFERIMENTO.has(cst.codigo) && !temDiferimento) {
++      erros.push(`CST ${cst.codigo} (${cst.descricao}) exige o grupo de diferimento`);
++    }
++    if (!CST_COM_DIFERIMENTO.has(cst.codigo) && temDiferimento) {
++      erros.push(
++        `CST ${cst.codigo} (${cst.descricao}) não admite grupo de diferimento — ` +
++          `só CST 510 e 515 admitem`,
++      );
++    }
++  }
++
++  // gTribRegular: quando presente, precisa ser internamente coerente.
++  if (declaracao.tribRegular) {
++    const { cstRegular, cClassTribRegular } = declaracao.tribRegular;
++    if (!buscarCst(cstRegular)) {
++      erros.push(`CST regular "${cstRegular}" não existe na tabela CST-IBS/CBS`);
++    }
++    if (!cClassTribRegular.startsWith(cstRegular)) {
++      erros.push(
++        `cClassTrib regular "${cClassTribRegular}" incompatível com o CST regular "${cstRegular}"`,
++      );
++    }
++  }
++
++  return { valido: erros.length === 0, erros };
++}
++
++// ---------------------------------------------------------------------------
++// PENDÊNCIAS DO C5 — o que a pesquisa deixou EXPLICITAMENTE em aberto.
++//
++// Estão aqui, em código, para que ninguém trate como resolvido. Enquanto
++// existirem, o grupo IBSCBS não deve ser habilitado em produção.
++// ---------------------------------------------------------------------------
++
++export const PENDENCIAS_C5 = [
++  "Importar os 164 cClassTrib oficiais para a tabela de domínio " +
++    "(cclasstrib_ibscbs). Sem eles, validarDeclaracao falha fechada.",
++  "Construir o mapeamento negócio → CST/cClassTrib. O enum RegimeIbsCbs " +
++    "(5 valores) não é suficiente para escolher entre 164 códigos, cada um " +
++    "amarrado a um artigo da LC 214/2025. É decisão contábil, não técnica — " +
++    "validar com contador antes de codificar.",
++  "Confirmar o papel do NBS: a pesquisa sugere que ele é tabela de correlação " +
++    "cruzada (Anexo VIII), não campo livre. Hoje é string opcional no input.",
++  "Confirmar o caminho XML de opSimpNac/regApIBSCBSSN (dentro ou fora do " +
++    "grupo IBSCBS) antes de montar o payload com esses campos.",
++  "Confirmar se a fórmula de base de cálculo da NT-009 substitui ou coexiste " +
++    "com a da NT-004.",
++  "Não há data confirmada de obrigatoriedade do PREENCHIMENTO do grupo IBSCBS " +
++    "na NFS-e — o Ato Conjunto 4/2026 rege a obrigatoriedade de EMISSÃO do " +
++    "documento. A NF-e teve as datas de produção suspensas na NT 2025.002 " +
++    "v1.51. Por isso o grupo é opcional e controlado por flag, não por data.",
++  "Validar tudo contra o XSD oficial baixado fora do ambiente de pesquisa " +
++    "antes de qualquer cálculo real em produção.",
++] as const;
+diff --git a/src/lib/fiscal/provider.ts b/src/lib/fiscal/provider.ts
+index b64c00b..8f979dc 100644
+--- a/src/lib/fiscal/provider.ts
++++ b/src/lib/fiscal/provider.ts
+@@ -4,6 +4,11 @@
+  * e as duas classes de erro (regras 8 e 21 do CLAUDE.md).
+  */
+ import { type RegimeIbsCbs } from "./reforma";
++import {
++  type DeclaracaoTributariaIBSCBS,
++  type IntencaoRegimeTributario,
++  type ResultadoCalculoIBSCBS,
++} from "./ibscbs";
+ 
+ // ---------------------------------------------------------------------------
+ // Erros classificados — a distinção transiente/permanente dirige o retry
+@@ -74,13 +79,32 @@ export interface EmitirNfseInput {
+     competencia: string; // ISO date (yyyy-mm-dd)
+     /** Código NBS (Nomenclatura Brasileira de Serviços) — reforma. Null no legado. */
+     codigoNbs: string | null;
+-    /** Tributos da reforma (CBS/IBS) já calculados. Zerados no modelo antigo. */
++    /**
++     * Tributos da reforma (CBS/IBS).
++     *
++     * ATENÇÃO À NATUREZA DOS CAMPOS (item C5 da auditoria): `regime` e os
++     * valores calculados são INTENÇÃO DE NEGÓCIO e prévia interna — servem para
++     * a UI e para relatório, e NÃO são o vocabulário que a DPS espera. Na NFS-e
++     * quem calcula o valor final de IBS/CBS é o Ambiente de Dados Nacional, a
++     * partir do CST/cClassTrib declarado; empurrar um valor já pronto pode
++     * divergir do que ele calcular. O que de fato se declara é `declaracao`.
++     */
+     reforma: {
+       regime: RegimeIbsCbs;
+       cbsAliquota: number;
+       ibsAliquota: number;
+       cbsValorCentavos: number;
+       ibsValorCentavos: number;
++      /**
++       * Grupo IBSCBS da DPS — CST, cClassTrib e subgrupos condicionais.
++       * Ausente/`null` enquanto o preenchimento do grupo não estiver
++       * habilitado: não há data confirmada de obrigatoriedade de PREENCHIMENTO
++       * para a NFS-e, e a NF-e teve as datas de produção suspensas na NT
++       * 2025.002 v1.51. Por isso é flag, não calendário.
++       */
++      declaracao?: DeclaracaoTributariaIBSCBS | null;
++      /** Contexto do Simples Nacional (opSimpNac / regApIBSCBSSN, NT-009). */
++      intencao?: IntencaoRegimeTributario | null;
+     };
+   };
+ }
+@@ -91,6 +115,12 @@ export interface EmitirNfseResult {
+   providerId: string;
+   urlPdf: string | null;
+   urlXml: string | null;
++  /**
++   * Grupo IBSCBS CALCULADO pelo Ambiente de Dados Nacional e devolvido junto
++   * com a nota autorizada. É dado de auditoria: persistir, nunca recalcular
++   * localmente. Ausente enquanto o provider não expuser esses campos.
++   */
++  resultadoCalculado?: ResultadoCalculoIBSCBS | null;
+ }
+ 
+ export interface FiscalProvider {
+diff --git a/src/lib/fiscal/providers/focusnfe.test.ts b/src/lib/fiscal/providers/focusnfe.test.ts
+index 376dfa7..59911c6 100644
+--- a/src/lib/fiscal/providers/focusnfe.test.ts
++++ b/src/lib/fiscal/providers/focusnfe.test.ts
+@@ -376,3 +376,77 @@ describe("ambiente", () => {
+     expect(chamadas[0]!.url).toContain("https://api.focusnfe.com.br/");
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// Grupo IBSCBS (item C5)
++// ---------------------------------------------------------------------------
++
++describe("grupo IBSCBS no payload", () => {
++  it("sem declaração, nada da reforma vai no payload (estado normal hoje)", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    await provider.emitir(ENTRADA);
++
++    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
++    expect(servico.ibs_cbs_classificacao_tributaria).toBeUndefined();
++  });
++
++  it("com declaração válida, envia o cClassTrib no campo da Focus", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    await provider.emitir({
++      ...ENTRADA,
++      servico: {
++        ...ENTRADA.servico,
++        reforma: {
++          ...ENTRADA.servico.reforma,
++          declaracao: { cst: "200", cClassTrib: "200027" },
++        },
++      },
++    });
++
++    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
++    // Os 3 primeiros dígitos do cClassTrib SÃO o CST — um campo carrega os dois.
++    expect(servico.ibs_cbs_classificacao_tributaria).toBe("200027");
++  });
++
++  it("declaração incoerente é erro PERMANENTE e a nota nem é enviada", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    const erro = await provider
++      .emitir({
++        ...ENTRADA,
++        servico: {
++          ...ENTRADA.servico,
++          reforma: {
++            ...ENTRADA.servico.reforma,
++            // cClassTrib não bate com o CST
++            declaracao: { cst: "200", cClassTrib: "000001" },
++          },
++        },
++      })
++      .catch((e: unknown) => e);
++
++    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
++    expect((erro as FiscalErrorPermanent).codigo).toBe("ibscbs_invalido");
++    // Nenhuma requisição saiu: falhou antes de tocar a prefeitura.
++    expect(chamadas).toHaveLength(0);
++  });
++
++  it("CST que exige diferimento sem o grupo é recusado antes do envio", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    const erro = await provider
++      .emitir({
++        ...ENTRADA,
++        servico: {
++          ...ENTRADA.servico,
++          reforma: {
++            ...ENTRADA.servico.reforma,
++            declaracao: { cst: "510", cClassTrib: "510001" },
++          },
++        },
++      })
++      .catch((e: unknown) => e);
++
++    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
++    expect((erro as FiscalErrorPermanent).message).toContain("diferimento");
++    expect(chamadas).toHaveLength(0);
++  });
++});
+diff --git a/src/lib/fiscal/providers/focusnfe.ts b/src/lib/fiscal/providers/focusnfe.ts
+index ac0acfb..b2747ae 100644
+--- a/src/lib/fiscal/providers/focusnfe.ts
++++ b/src/lib/fiscal/providers/focusnfe.ts
+@@ -6,6 +6,7 @@ import {
+   type EmitirNfseResult,
+   type FiscalProvider,
+ } from "../provider";
++import { validarDeclaracao } from "../ibscbs";
+ 
+ /**
+  * Provider fiscal Focus NFe (regra 21 do CLAUDE.md).
+@@ -373,18 +374,35 @@ export class FocusNfeProvider implements FiscalProvider {
+   /**
+    * Traduz o nosso `EmitirNfseInput` no JSON da Focus NFe.
+    *
+-   * PENDÊNCIA CONSCIENTE (item C5 da auditoria): a Focus já aceita os campos
+-   * estruturados da reforma (`ibs_cbs_classificacao_tributaria` = cClassTrib,
+-   * `codigo_indicador_operacao`). NÃO os enviamos ainda porque o sistema não
+-   * modela CST/cClassTrib — o `regime_ibscbs` que temos é um agregado nosso,
+-   * não um código da tabela oficial, e mapear um para o outro sem a NT
+-   * 007/2026 lida na íntegra seria inventar enquadramento fiscal. Enquanto
+-   * isso não for resolvido, esses campos ficam ausentes e a nota sai com o
+-   * tratamento padrão do município. NÃO promover para produção sem fechar isso.
++   * GRUPO IBSCBS (item C5): quando `servico.reforma.declaracao` está
++   * preenchida, enviamos o `cClassTrib` no campo que a Focus documenta
++   * (`ibs_cbs_classificacao_tributaria`). Os 3 primeiros dígitos do cClassTrib
++   * SÃO o CST — a regra estrutural da tabela oficial —, então esse único campo
++   * carrega os dois códigos, e é por isso que não inventamos um nome de campo
++   * separado para o CST, que a documentação da Focus não expõe.
++   *
++   * Quando a declaração é `null`, nada da reforma é enviado e a nota sai com o
++   * tratamento padrão do município. É o estado normal hoje: não há data
++   * confirmada de obrigatoriedade de preenchimento do grupo na NFS-e.
+    */
+   private montarPayload(input: EmitirNfseInput): Record<string, unknown> {
+     const { prestador, tomador, servico } = input;
+     const ehCnpj = tomador.cpfCnpj.replace(/\D/g, "").length === 14;
++    const declaracao = servico.reforma.declaracao ?? null;
++
++    if (declaracao) {
++      // Falha fechada: CST/cClassTrib incoerentes são erro de enquadramento
++      // fiscal, não instabilidade. Retry não conserta — erro PERMANENTE
++      // (regra 8), e a nota nem chega a ser enviada à prefeitura.
++      const validacao = validarDeclaracao(declaracao);
++      if (!validacao.valido) {
++        throw new FiscalErrorPermanent(
++          `Grupo IBSCBS inválido: ${validacao.erros.join("; ")}`,
++          "ibscbs_invalido",
++          declaracao,
++        );
++      }
++    }
+ 
+     return {
+       data_emissao: `${servico.competencia}T00:00:00`,
+@@ -407,6 +425,8 @@ export class FocusNfeProvider implements FiscalProvider {
+         iss_retido: servico.issRetido,
+         // Reforma: o NBS o sistema já tem e é aceito pela Focus.
+         codigo_nbs: servico.codigoNbs ?? undefined,
++        // Grupo IBSCBS — só vai quando explicitamente declarado.
++        ibs_cbs_classificacao_tributaria: declaracao?.cClassTrib ?? undefined,
+       },
+     };
+   }
+diff --git a/supabase/migrations/20260805180000_ibscbs_dominio.sql b/supabase/migrations/20260805180000_ibscbs_dominio.sql
+new file mode 100644
+index 0000000..9c95056
+--- /dev/null
++++ b/supabase/migrations/20260805180000_ibscbs_dominio.sql
+@@ -0,0 +1,169 @@
++-- ============================================================================
++-- Tabelas de domínio do grupo IBSCBS (item C5 da auditoria).
++--
++-- Fonte: `ibscbs_modelagem_tecnica.md` (pesquisa de ago/2026) — extração ao
++-- vivo do DOM do Portal da Conformidade Fácil (SVRS/ENCAT) em 05/08/2026,
++-- que é dado primário, não resumo mediado. O portal cobre 17 tipos de DF-e,
++-- NF-e e NFS-e incluídos: é a MESMA tabela de domínio para os dois documentos.
++--
++-- POR QUE TABELA E NÃO ENUM (regra 17 do CLAUDE.md tem exceção justificada
++-- aqui): os enums do projeto (`nota_status`, `plano_tipo`...) são vocabulário
++-- NOSSO, que só muda com deploy. CST e cClassTrib são vocabulário de TERCEIRO,
++-- mantido por Nota Técnica do Comitê Gestor: 18 e 164 códigos hoje, sujeitos a
++-- mudança sem aviso. A própria pesquisa encontrou fontes divergindo sobre se o
++-- CST 220 foi removido (seção 4 do relatório). Um `CREATE TYPE` exigiria
++-- migration + deploy a cada Nota Técnica; tabela absorve a mudança com um
++-- INSERT. Isso é decisão de engenharia consciente, não descuido.
++--
++-- Estas tabelas NÃO têm empresa_id: são dados de referência nacional, iguais
++-- para todos os tenants. Por isso a policy é de leitura para qualquer usuário
++-- autenticado e escrita nenhuma pela API (só migration/service_role).
++-- ============================================================================
++
++
++-- ----------------------------------------------------------------------------
++-- 1. CST-IBS/CBS — 18 códigos (tabela COMPLETA)
++--
++-- As colunas booleanas são os indicadores da tabela oficial que determinam
++-- quais subgrupos do XML são obrigatórios/vedados para cada CST.
++-- ----------------------------------------------------------------------------
++CREATE TABLE IF NOT EXISTS cst_ibscbs (
++  codigo              TEXT PRIMARY KEY CHECK (codigo ~ '^[0-9]{3}$'),
++  descricao           TEXT NOT NULL,
++  exige_tributacao    BOOLEAN NOT NULL DEFAULT false,
++  red_base_calculo    BOOLEAN NOT NULL DEFAULT false,
++  red_aliquota        BOOLEAN NOT NULL DEFAULT false,
++  transf_credito      BOOLEAN NOT NULL DEFAULT false,
++  diferimento         BOOLEAN NOT NULL DEFAULT false,
++  monofasica          BOOLEAN NOT NULL DEFAULT false,
++  cred_pres_zfm       BOOLEAN NOT NULL DEFAULT false,
++  ajuste_competencia  BOOLEAN NOT NULL DEFAULT false,
++  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
++);
++
++COMMENT ON TABLE cst_ibscbs IS
++  'Código de Situação Tributária IBS/CBS (3 dígitos). Tabela de domínio nacional, '
++  'compartilhada por NF-e e NFS-e. Fonte: Portal da Conformidade Fácil (SVRS/ENCAT), '
++  'extração de 05/08/2026. Espelhada em src/lib/fiscal/ibscbs.ts (TABELA_CST).';
++
++INSERT INTO cst_ibscbs (
++  codigo, descricao, exige_tributacao, red_base_calculo, red_aliquota,
++  transf_credito, diferimento, monofasica, cred_pres_zfm, ajuste_competencia
++) VALUES
++  ('000', 'Tributação integral',                 true,  false, false, false, false, false, false, false),
++  ('010', 'Alíquotas uniformes',                 true,  false, false, false, false, false, false, false),
++  ('011', 'Alíquotas uniformes reduzidas',       true,  false, true,  false, false, false, false, false),
++  ('200', 'Alíquota reduzida',                   true,  false, true,  false, false, false, false, false),
++  ('220', 'Alíquota fixa',                       true,  false, false, false, false, false, false, false),
++  ('221', 'Alíquota fixa proporcional',          true,  false, false, false, false, false, false, false),
++  ('222', 'Redução de Base de Cálculo',          true,  true,  false, false, false, false, false, false),
++  ('400', 'Isenção',                             false, false, false, false, false, false, false, false),
++  ('410', 'Imunidade e não incidência',          false, false, false, false, false, false, false, false),
++  ('510', 'Diferimento',                         true,  false, false, false, true,  false, false, false),
++  ('515', 'Diferimento com redução de alíquota', true,  false, true,  false, true,  false, false, false),
++  ('550', 'Suspensão',                           true,  false, false, false, false, false, false, false),
++  ('620', 'Tributação Monofásica',               false, false, false, false, false, true,  false, false),
++  ('800', 'Transferência de crédito',            false, false, false, true,  false, false, false, false),
++  ('810', 'Ajuste de IBS na ZFM',                false, false, false, false, false, false, true,  false),
++  ('811', 'Ajustes',                             false, false, false, false, false, false, false, true),
++  ('820', 'Tributação em documento específico',  false, false, false, false, false, false, false, false),
++  ('830', 'Exclusão da Base de Cálculo',         true,  false, false, false, false, false, false, false)
++ON CONFLICT (codigo) DO NOTHING;
++
++
++-- ----------------------------------------------------------------------------
++-- 2. cClassTrib — 164 códigos oficiais
++--
++-- CRIADA VAZIA DE PROPÓSITO. A pesquisa confirmou a existência e a contagem
++-- dos 164 códigos ("Exibindo 164 de 164 registros") e a distribuição por CST,
++-- mas o relatório entregue não trouxe as 164 linhas em si — elas ficaram no
++-- relatório de origem, a ser fornecido à parte.
++--
++-- Semear parcialmente uma tabela de enquadramento fiscal seria PIOR que
++-- deixá-la vazia: alguém leria as poucas linhas presentes como se fossem a
++-- tabela inteira. Vazia, `validarDeclaracao()` falha fechada e recusa a
++-- emissão com IBSCBS até a importação acontecer. Ver PENDENCIAS_C5.
++--
++-- A view `cclasstrib_conferencia` abaixo compara o que foi importado com a
++-- contagem oficial por CST, para que a importação seja verificável em vez de
++-- "parece que deu certo".
++-- ----------------------------------------------------------------------------
++CREATE TABLE IF NOT EXISTS cclasstrib_ibscbs (
++  codigo            TEXT PRIMARY KEY CHECK (codigo ~ '^[0-9]{6}$'),
++  cst               TEXT NOT NULL REFERENCES cst_ibscbs(codigo),
++  descricao         TEXT NOT NULL,
++  -- Percentuais em FRAÇÃO (0.60 = 60%), coerente com o resto do domínio.
++  perc_reducao_ibs  NUMERIC(6,4) CHECK (perc_reducao_ibs IS NULL OR (perc_reducao_ibs >= 0 AND perc_reducao_ibs <= 1)),
++  perc_reducao_cbs  NUMERIC(6,4) CHECK (perc_reducao_cbs IS NULL OR (perc_reducao_cbs >= 0 AND perc_reducao_cbs <= 1)),
++  ind_trib_regular  BOOLEAN NOT NULL DEFAULT false,
++  ind_cred_pres     BOOLEAN NOT NULL DEFAULT false,
++  ind_estorno_cred  BOOLEAN NOT NULL DEFAULT false,
++  -- 1-Fixa · 2-Padrão · 3-Sem Alíquota · 4-Uniforme Nacional · 5-Uniforme Setorial
++  tipo_aliquota     SMALLINT CHECK (tipo_aliquota IS NULL OR tipo_aliquota BETWEEN 1 AND 5),
++  artigo_lc214      TEXT,
++  url_dispositivo   TEXT,
++  -- Lacuna 3 da pesquisa: dIniVig/dFimVig não foram expostos na extração ao
++  -- vivo. Ficam nullable para receber o versionamento histórico quando vierem.
++  vigencia_inicio   DATE,
++  vigencia_fim      DATE,
++  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
++
++  -- Regra estrutural da tabela oficial: os 3 primeiros dígitos do cClassTrib
++  -- repetem o CST. Vale como constraint de banco, não só de aplicação.
++  CONSTRAINT chk_cclasstrib_prefixo_cst CHECK (left(codigo, 3) = cst)
++);
++
++COMMENT ON TABLE cclasstrib_ibscbs IS
++  'Código de Classificação Tributária IBS/CBS (6 dígitos = CST + sequencial). '
++  '164 códigos oficiais. CRIADA VAZIA: importar do Portal da Conformidade Fácil '
++  '(SVRS/ENCAT) antes de habilitar o grupo IBSCBS. Conferir com a view '
++  'cclasstrib_conferencia.';
++
++CREATE INDEX IF NOT EXISTS idx_cclasstrib_cst ON cclasstrib_ibscbs(cst);
++
++
++-- ----------------------------------------------------------------------------
++-- 3. Conferência da importação
++--
++-- Contagem oficial por CST, da extração de 05/08/2026 (total: 164).
++-- ----------------------------------------------------------------------------
++CREATE OR REPLACE VIEW cclasstrib_conferencia AS
++WITH esperado(cst, qtd) AS (
++  VALUES ('000', 5), ('010', 2), ('011', 5), ('200', 54), ('220', 3), ('221', 4),
++         ('222', 1), ('400', 2), ('410', 38), ('510', 1), ('515', 1), ('550', 25),
++         ('620', 7), ('800', 2), ('810', 1), ('811', 3), ('820', 9), ('830', 1)
++)
++SELECT
++  e.cst,
++  e.qtd                                   AS esperado,
++  count(c.codigo)::INT                    AS importado,
++  count(c.codigo)::INT = e.qtd            AS confere
++FROM esperado e
++LEFT JOIN cclasstrib_ibscbs c ON c.cst = e.cst
++GROUP BY e.cst, e.qtd
++ORDER BY e.cst;
++
++COMMENT ON VIEW cclasstrib_conferencia IS
++  'Compara o que foi importado em cclasstrib_ibscbs com a contagem oficial por '
++  'CST (164 no total). Se alguma linha tiver confere=false, a importação está '
++  'incompleta ou a tabela oficial mudou de versão.';
++
++
++-- ----------------------------------------------------------------------------
++-- 4. RLS — dados de referência nacional
++--
++-- Não têm empresa_id porque não pertencem a tenant nenhum. Leitura liberada a
++-- usuário autenticado (a UI precisa montar seletores); escrita, a ninguém pela
++-- API — só migration e service_role.
++-- ----------------------------------------------------------------------------
++ALTER TABLE cst_ibscbs        ENABLE ROW LEVEL SECURITY;
++ALTER TABLE cclasstrib_ibscbs ENABLE ROW LEVEL SECURITY;
++
++DROP POLICY IF EXISTS sel_cst_ibscbs ON cst_ibscbs;
++CREATE POLICY sel_cst_ibscbs ON cst_ibscbs FOR SELECT TO authenticated USING (true);
++
++DROP POLICY IF EXISTS sel_cclasstrib_ibscbs ON cclasstrib_ibscbs;
++CREATE POLICY sel_cclasstrib_ibscbs ON cclasstrib_ibscbs FOR SELECT TO authenticated USING (true);
++
++REVOKE ALL ON TABLE cst_ibscbs        FROM anon;
++REVOKE ALL ON TABLE cclasstrib_ibscbs FROM anon;
+-- 
+2.43.0
+

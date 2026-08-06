@@ -1,0 +1,1114 @@
+From 43b48d84a3272a1f19fe2ecee506c689de18ec99 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Wed, 5 Aug 2026 15:21:20 +0000
+Subject: [PATCH 2/3] feat(fiscal): FocusNfeProvider + rota de webhook da Focus
+ NFe (C4, parcial)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Auditoria item C4: ate agora o unico provider concreto era o mock, que
+devolve numero aleatorio. Implementa o primeiro provider fiscal real
+atras da interface FiscalProvider ja existente (regra 21) — o motor de
+retry (src/inngest/functions/emitir-nfse.ts) NAO foi tocado.
+
+src/lib/fiscal/providers/focusnfe.ts
+- POST /v2/nfse?ref=<referencia_externa> e GET /v2/nfse/<ref>, Basic auth
+  com o token como usuario e senha vazia.
+- Emissao assincrona resolvida sem mexer no motor: se voltar
+  processando_autorizacao, faz polling curto (5x2s) e, se nao resolver,
+  lanca FiscalErrorTransient — o backoff do produto (5m/15m/1h, regra 9)
+  assume, e a tentativa seguinte comeca por consultarPorReferencia().
+- Idempotencia (regra 7): ref duplicada nao e erro, cai na consulta e
+  devolve a nota ja emitida. Nunca duplica nota na prefeitura.
+- Classificacao de erro (regra 8): 4xx de validacao, rejeicao da
+  prefeitura e cancelamento sao PERMANENTES; 408/429/5xx, timeout, falha
+  de rede e corpo fora do contrato sao TRANSIENTES. Nada de erro generico.
+- Zod na fronteira da resposta (regra 19); payload bruto preservado para
+  notas_fiscais_tentativas (regra 10).
+- Ambiente padrao = homologacao; producao exige escolha explicita.
+
+src/app/api/webhook/focusnfe/route.ts
+- Recebe o gatilho, mas trata o corpo como DADO: reconsulta a API da Focus
+  com o nosso token antes de gravar. Webhook forjado nao marca nota nenhuma.
+- Header x-focusnfe-token exigido quando FOCUSNFE_WEBHOOK_TOKEN existe.
+- empresa_id sempre derivado da linha da nota, nunca do corpo (regra 3).
+- NAO transiciona status: a maquina de estados continua sendo do motor
+  (regras 5 e 6). Grava so os dados da autorizacao, de forma idempotente
+  (update com .is("numero_nfse", null)), sem corrida com o motor.
+
+src/lib/env.ts — FOCUSNFE_TOKEN, FOCUSNFE_AMBIENTE, FOCUSNFE_WEBHOOK_TOKEN
+no schema Zod (regra 4). focusNfeEnv() cobra o token so de quem usa o
+provider, entao tenant em mock nao quebra. .env.example documentado.
+
+27 testes novos, sem rede (fetch injetado): payload, conversao de
+centavos e aliquota, os quatro status da Focus, cada classe de erro,
+ref duplicada, autorizado sem numero, status desconhecido, ambiente.
+
+PENDENTE E MARCADO NO CODIGO (nao implementado de proposito): os campos
+estruturados da reforma que a Focus aceita (ibs_cbs_classificacao_tributaria
+= cClassTrib, codigo_indicador_operacao) nao sao enviados, porque o sistema
+nao modela CST/cClassTrib (item C5) e mapear regime_ibscbs para codigo
+oficial sem a NT 007/2026 seria inventar enquadramento fiscal. codigo_nbs,
+que ja existe no dominio, e enviado.
+
+A VERIFICAR EM HOMOLOGACAO antes de producao: aliquota de ISS enviada como
+PERCENTUAL (nosso schema guarda fracao) conforme o exemplo oficial de SP, e
+iss_retido como booleano. Ambos isolados em helper testado.
+
+DoD: typecheck OK, lint OK, test OK (82), build OK.
+---
+ .env.example                              |  12 +
+ src/app/api/webhook/focusnfe/route.ts     | 126 +++++++
+ src/lib/env.ts                            |  34 ++
+ src/lib/fiscal/providers/focusnfe.test.ts | 378 +++++++++++++++++++
+ src/lib/fiscal/providers/focusnfe.ts      | 421 ++++++++++++++++++++++
+ src/lib/fiscal/providers/index.ts         |   8 +-
+ 6 files changed, 978 insertions(+), 1 deletion(-)
+ create mode 100644 src/app/api/webhook/focusnfe/route.ts
+ create mode 100644 src/lib/fiscal/providers/focusnfe.test.ts
+ create mode 100644 src/lib/fiscal/providers/focusnfe.ts
+
+diff --git a/.env.example b/.env.example
+index 91287d0..2388e14 100644
+--- a/.env.example
++++ b/.env.example
+@@ -43,3 +43,15 @@ EMAIL_REMETENTE="Agência Fiscal <notas@seudominio.com.br>"
+ 
+ # Opcional: taxa de falha simulada do provider mock (0 a 1)
+ MOCK_FISCAL_TAXA_FALHA=0.3
++
++# --- FOCUS NFe (provider fiscal real) ---
++# Exigido apenas por empresas com provider_fiscal = 'focusnfe'.
++# Painel: https://app-v2.focusnfe.com.br → Painel API → Tokens
++# ATENÇÃO: use o token de HOMOLOGAÇÃO enquanto estiver testando.
++FOCUSNFE_TOKEN=
++# homologacao (padrão) | producao — produção exige troca explícita
++FOCUSNFE_AMBIENTE=homologacao
++# Opcional: se definido, /api/webhook/focusnfe exige este valor no header
++# x-focusnfe-token (mín. 16 chars). A rota reconsulta a API da Focus de
++# qualquer forma antes de gravar, então isso é defesa adicional, não a única.
++FOCUSNFE_WEBHOOK_TOKEN=
+diff --git a/src/app/api/webhook/focusnfe/route.ts b/src/app/api/webhook/focusnfe/route.ts
+new file mode 100644
+index 0000000..108006e
+--- /dev/null
++++ b/src/app/api/webhook/focusnfe/route.ts
+@@ -0,0 +1,126 @@
++import { NextResponse, type NextRequest } from "next/server";
++import { z } from "zod";
++import { createAdminClient } from "@/lib/supabase/admin";
++import { focusNfeEnv, serverEnv } from "@/lib/env";
++import { FocusNfeProvider } from "@/lib/fiscal/providers/focusnfe";
++import { isFiscalError } from "@/lib/fiscal/provider";
++
++/**
++ * Webhook (gatilho) da Focus NFe.
++ *
++ * A emissão na Focus é ASSÍNCRONA: o POST de emissão só confirma recebimento
++ * (`processando_autorizacao`) e a autorização real da prefeitura chega depois.
++ * Este handler é o caminho rápido para registrar esse desfecho.
++ *
++ * SEGURANÇA — o corpo do webhook é tratado como DADO, nunca como verdade:
++ *   1. Se FOCUSNFE_WEBHOOK_TOKEN estiver configurado, exigimos o header
++ *      `x-focusnfe-token` antes de qualquer I/O (mesma ordem do webhook Asaas).
++ *   2. Independentemente disso, RECONSULTAMOS a API da Focus com o nosso token
++ *      antes de gravar. Um POST forjado com `status: autorizado` não consegue
++ *      marcar nota nenhuma como emitida, porque quem decide é a consulta.
++ *   3. `ref` é a `referencia_externa` (UUID gerado por nós na criação da nota,
++ *      regra 7). O `empresa_id` vem SEMPRE da linha da nota, nunca do corpo
++ *      do webhook (regra 3).
++ *
++ * Regra 2: admin client permitido aqui porque a origem é validada antes do I/O.
++ *
++ * DECISÃO DE DESENHO — este handler NÃO transiciona o status da nota.
++ * Quem é dono da máquina de estados é o motor Inngest (regras 5 e 6): ele está
++ * no meio de um `step.sleep` do backoff e, na próxima tentativa, chama
++ * `consultarPorReferencia()` antes de reemitir, encontra a nota autorizada e
++ * faz a transição `reprocessando → emitida` normalmente. Se este webhook
++ * transicionasse por conta própria, o passo `gravar-emissao` do motor falharia
++ * depois com "Transição inválida: emitida -> emitida", poluindo o log de uma
++ * emissão que na verdade deu certo. O que fazemos aqui é gravar os dados da
++ * autorização (idempotente, só preenche o que está vazio) para que o desfecho
++ * fique registrado imediatamente, sem corrida com o motor.
++ */
++
++/** Só o `ref` é usado como entrada real — o resto é registrado para diagnóstico. */
++const gatilhoFocusSchema = z.object({
++  ref: z.string().min(1),
++  status: z.string().nullish(),
++  cnpj_emitente: z.string().nullish(),
++});
++
++export async function POST(request: NextRequest) {
++  // 1. Autenticação opcional do gatilho — antes de ler o corpo
++  const tokenEsperado = serverEnv().FOCUSNFE_WEBHOOK_TOKEN;
++  if (tokenEsperado && request.headers.get("x-focusnfe-token") !== tokenEsperado) {
++    return NextResponse.json({ erro: "não autorizado" }, { status: 401 });
++  }
++
++  // 2. Validação do payload na fronteira (regra 19)
++  const corpo = gatilhoFocusSchema.safeParse(await request.json().catch(() => null));
++  if (!corpo.success) {
++    return NextResponse.json(
++      { erro: "payload inválido", detalhes: corpo.error.flatten() },
++      { status: 400 },
++    );
++  }
++  const ref = corpo.data.ref;
++
++  // 3. Fonte da verdade: a API da Focus, consultada com o NOSSO token.
++  let autorizada;
++  try {
++    autorizada = await new FocusNfeProvider(focusNfeEnv()).consultarPorReferencia(ref);
++  } catch (e) {
++    // Rejeição da prefeitura (erro permanente) é desfecho legítimo: nada a
++    // gravar aqui — o motor registra em notas_fiscais_tentativas na próxima
++    // tentativa, com o payload bruto. Ack para a Focus não reenviar.
++    if (isFiscalError(e)) {
++      return NextResponse.json({ ok: true, ref, semAutorizacao: e.kind, motivo: e.message });
++    }
++    // Falha nossa/de rede: 5xx faz a Focus reenviar o gatilho depois.
++    return NextResponse.json(
++      { erro: "falha ao consultar a Focus NFe", detalhe: e instanceof Error ? e.message : String(e) },
++      { status: 502 },
++    );
++  }
++
++  // Ainda processando: ack e espera o próximo gatilho.
++  if (!autorizada) {
++    return NextResponse.json({ ok: true, ref, aindaProcessando: true });
++  }
++
++  const db = createAdminClient();
++
++  const { data: nota, error: erroBusca } = await db
++    .from("notas_fiscais")
++    .select("id, empresa_id, numero_nfse")
++    .eq("referencia_externa", ref)
++    .maybeSingle();
++
++  if (erroBusca) {
++    return NextResponse.json({ erro: "falha ao localizar a nota" }, { status: 500 });
++  }
++  // Nota de outro sistema/ambiente usando a mesma conta Focus: ack sem ação.
++  if (!nota) {
++    return NextResponse.json({ ok: true, ref, notaDesconhecida: true });
++  }
++
++  // Idempotente: se o motor já gravou o número, não sobrescreve nada.
++  if (nota.numero_nfse) {
++    return NextResponse.json({ ok: true, ref, notaId: nota.id, jaRegistrada: true });
++  }
++
++  const { error: erroUpdate } = await db
++    .from("notas_fiscais")
++    .update({
++      numero_nfse: autorizada.numeroNfse,
++      codigo_verificacao: autorizada.codigoVerificacao,
++      provider_id: autorizada.providerId,
++      url_pdf: autorizada.urlPdf,
++      url_xml: autorizada.urlXml,
++    })
++    .eq("id", nota.id)
++    .eq("empresa_id", nota.empresa_id) // tenant sempre derivado da linha (regra 3)
++    .is("numero_nfse", null); // não corre com o motor: só preenche o que está vazio
++
++  if (erroUpdate) {
++    return NextResponse.json({ erro: "falha ao gravar a autorização" }, { status: 500 });
++  }
++
++  // O status continua sendo transicionado pelo motor Inngest (ver cabeçalho).
++  return NextResponse.json({ ok: true, ref, notaId: nota.id, registrada: true });
++}
+diff --git a/src/lib/env.ts b/src/lib/env.ts
+index ea3ae27..1f36ca1 100644
+--- a/src/lib/env.ts
++++ b/src/lib/env.ts
+@@ -25,6 +25,21 @@ const serverEnvSchema = z.object({
+       message: "CERT_ENCRYPTION_KEY deve ser 32 bytes em base64 (openssl rand -base64 32)",
+     }),
+   MOCK_FISCAL_TAXA_FALHA: z.string().optional(),
++  /**
++   * Focus NFe (provider fiscal real). Opcional aqui porque só é exigido de
++   * quem tem `empresas.provider_fiscal = 'focusnfe'` — a obrigatoriedade é
++   * cobrada em `focusNfeEnv()`, abaixo. Token obtido no painel da Focus
++   * (Painel API → Tokens), por empresa. NUNCA hardcode (regra 4).
++   */
++  FOCUSNFE_TOKEN: z.string().min(1).optional(),
++  /** Padrão homologação de propósito: produção exige escolha explícita. */
++  FOCUSNFE_AMBIENTE: z.enum(["homologacao", "producao"]).default("homologacao"),
++  /**
++   * Opcional. Se definido, /api/webhook/focusnfe passa a exigir este valor no
++   * header `x-focusnfe-token`. A rota NÃO depende disso para ser segura: ela
++   * sempre reconsulta a API da Focus com o nosso token antes de gravar nada.
++   */
++  FOCUSNFE_WEBHOOK_TOKEN: z.string().min(16).optional(),
+ });
+ 
+ const publicEnvSchema = z.object({
+@@ -39,6 +54,25 @@ export function serverEnv() {
+   return serverEnvSchema.parse(process.env);
+ }
+ 
++/**
++ * Config da Focus NFe, com a obrigatoriedade cobrada só aqui.
++ * Chamada exclusivamente pela factory `focusnfe` do registry de providers,
++ * então um tenant em `mock` nunca é afetado pela ausência do token.
++ */
++export function focusNfeEnv(): {
++  token: string;
++  ambiente: "homologacao" | "producao";
++} {
++  const env = serverEnv();
++  if (!env.FOCUSNFE_TOKEN) {
++    throw new Error(
++      "FOCUSNFE_TOKEN não configurado: a empresa está com provider_fiscal='focusnfe' " +
++        "mas o token da Focus NFe não está no ambiente. Configure-o antes de emitir.",
++    );
++  }
++  return { token: env.FOCUSNFE_TOKEN, ambiente: env.FOCUSNFE_AMBIENTE };
++}
++
+ /** Seguro em qualquer lugar — apenas valores públicos. */
+ export function publicEnv() {
+   return publicEnvSchema.parse({
+diff --git a/src/lib/fiscal/providers/focusnfe.test.ts b/src/lib/fiscal/providers/focusnfe.test.ts
+new file mode 100644
+index 0000000..376dfa7
+--- /dev/null
++++ b/src/lib/fiscal/providers/focusnfe.test.ts
+@@ -0,0 +1,378 @@
++import { describe, it, expect } from "vitest";
++import {
++  FocusNfeProvider,
++  aliquotaIssParaPercentual,
++  centavosParaReais,
++  ehTransiente,
++  mensagemDeErro,
++  urlAbsoluta,
++} from "@/lib/fiscal/providers/focusnfe";
++import {
++  FiscalErrorPermanent,
++  FiscalErrorTransient,
++  type EmitirNfseInput,
++} from "@/lib/fiscal/provider";
++
++// ---------------------------------------------------------------------------
++// Infra de teste: fetch falso, sem rede.
++// ---------------------------------------------------------------------------
++
++interface RespostaFalsa {
++  status: number;
++  corpo: unknown;
++}
++
++interface ChamadaRegistrada {
++  url: string;
++  metodo: string;
++  corpo: unknown;
++  autorizacao: string | null;
++}
++
++function fetchFalso(respostas: RespostaFalsa[]) {
++  const chamadas: ChamadaRegistrada[] = [];
++  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
++    const headers = new Headers(init?.headers);
++    chamadas.push({
++      url: String(url),
++      metodo: init?.method ?? "GET",
++      corpo: typeof init?.body === "string" ? JSON.parse(init.body) : null,
++      autorizacao: headers.get("Authorization"),
++    });
++    const proxima = respostas[chamadas.length - 1] ?? respostas[respostas.length - 1];
++    if (!proxima) throw new Error("fetchFalso sem resposta configurada");
++    return {
++      status: proxima.status,
++      json: async () => proxima.corpo,
++    } as Response;
++  }) as unknown as typeof fetch;
++  return { impl, chamadas };
++}
++
++function criarProvider(respostas: RespostaFalsa[]) {
++  const { impl, chamadas } = fetchFalso(respostas);
++  const provider = new FocusNfeProvider({
++    token: "token-de-homologacao",
++    ambiente: "homologacao",
++    fetchImpl: impl,
++    esperar: async () => {}, // polling instantâneo no teste
++    tentativasPolling: 2,
++  });
++  return { provider, chamadas };
++}
++
++const ENTRADA: EmitirNfseInput = {
++  referenciaExterna: "11111111-2222-3333-4444-555555555555",
++  prestador: {
++    cnpj: "12345678000199",
++    inscricaoMunicipal: "987654",
++    codigoMunicipioIbge: "3550308",
++  },
++  tomador: {
++    cpfCnpj: "12345678901",
++    nome: "Cliente de Teste",
++    email: "cliente@exemplo.com.br",
++    endereco: { logradouro: "Rua Um", numero: "10" },
++  },
++  servico: {
++    descricao: "Consultoria de teste",
++    codigoServico: "01.01",
++    valorCentavos: 123_456,
++    aliquotaIss: 0.02, // fração no nosso schema = 2%
++    issRetido: false,
++    competencia: "2026-08-01",
++    codigoNbs: "115011000",
++    reforma: {
++      regime: "padrao",
++      cbsAliquota: 0.009,
++      ibsAliquota: 0.001,
++      cbsValorCentavos: 1111,
++      ibsValorCentavos: 123,
++    },
++  },
++};
++
++const AUTORIZADA = {
++  status: "autorizado",
++  numero: 4321,
++  codigo_verificacao: "ABC123",
++  caminho_xml_nota_fiscal: "/arquivos_development/nfse.xml",
++  caminho_danfse: "/arquivos_development/danfse.pdf",
++};
++
++// ---------------------------------------------------------------------------
++// Helpers puros
++// ---------------------------------------------------------------------------
++
++describe("helpers de conversão", () => {
++  it("converte centavos para reais com 2 casas", () => {
++    expect(centavosParaReais(123_456)).toBe("1234.56");
++    expect(centavosParaReais(1)).toBe("0.01");
++    expect(centavosParaReais(0)).toBe("0.00");
++  });
++
++  it("recusa valor que não é inteiro em centavos (regra 15)", () => {
++    expect(() => centavosParaReais(10.5)).toThrow(FiscalErrorPermanent);
++  });
++
++  it("converte alíquota fração → percentual", () => {
++    expect(aliquotaIssParaPercentual(0.02)).toBe("2");
++    expect(aliquotaIssParaPercentual(0.05)).toBe("5");
++    expect(aliquotaIssParaPercentual(0.0325)).toBe("3.25");
++    expect(aliquotaIssParaPercentual(0)).toBe("0");
++  });
++
++  it("monta URL absoluta a partir do caminho relativo, e preserva absoluta", () => {
++    expect(urlAbsoluta("https://x.com", "/a/b.xml")).toBe("https://x.com/a/b.xml");
++    expect(urlAbsoluta("https://x.com", "a/b.xml")).toBe("https://x.com/a/b.xml");
++    expect(urlAbsoluta("https://x.com", "https://y.com/b.xml")).toBe("https://y.com/b.xml");
++    expect(urlAbsoluta("https://x.com", null)).toBeNull();
++  });
++
++  it("agrega os erros da Focus numa mensagem única", () => {
++    expect(
++      mensagemDeErro(
++        { erros: [{ codigo: "E1", mensagem: "faltou X", correcao: "informe X" }] },
++        "fallback",
++      ),
++    ).toBe("E1 — faltou X — informe X");
++    expect(mensagemDeErro({ mensagem: "token inválido" }, "fallback")).toBe("token inválido");
++    expect(mensagemDeErro({}, "fallback")).toBe("fallback");
++  });
++
++  it("classifica HTTP transiente vs. permanente (regra 8)", () => {
++    expect(ehTransiente(500)).toBe(true);
++    expect(ehTransiente(503)).toBe(true);
++    expect(ehTransiente(429)).toBe(true);
++    expect(ehTransiente(408)).toBe(true);
++    expect(ehTransiente(422)).toBe(false);
++    expect(ehTransiente(400)).toBe(false);
++    expect(ehTransiente(401)).toBe(false);
++    expect(ehTransiente(404)).toBe(false);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// emitir()
++// ---------------------------------------------------------------------------
++
++describe("FocusNfeProvider.emitir", () => {
++  it("exige token — não permite provider sem credencial", () => {
++    expect(() => new FocusNfeProvider({ token: "", ambiente: "homologacao" })).toThrow(
++      FiscalErrorPermanent,
++    );
++  });
++
++  it("usa a URL de homologação, Basic auth e a ref como chave de idempotência", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    await provider.emitir(ENTRADA);
++
++    const c = chamadas[0]!;
++    expect(c.url).toBe(
++      `https://homologacao.focusnfe.com.br/v2/nfse?ref=${ENTRADA.referenciaExterna}`,
++    );
++    expect(c.metodo).toBe("POST");
++    expect(c.autorizacao).toBe(
++      `Basic ${Buffer.from("token-de-homologacao:").toString("base64")}`,
++    );
++  });
++
++  it("monta o payload traduzindo centavos, alíquota e tipo de documento do tomador", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    await provider.emitir(ENTRADA);
++
++    const corpo = chamadas[0]!.corpo as Record<string, Record<string, unknown>>;
++    expect(corpo.prestador).toMatchObject({
++      cnpj: "12345678000199",
++      inscricao_municipal: "987654",
++      codigo_municipio: "3550308",
++    });
++    // 11 dígitos → CPF (e não CNPJ)
++    expect(corpo.tomador!.cpf).toBe("12345678901");
++    expect(corpo.tomador!.cnpj).toBeUndefined();
++    expect(corpo.servico).toMatchObject({
++      discriminacao: "Consultoria de teste",
++      item_lista_servico: "01.01",
++      valor_servicos: "1234.56",
++      aliquota: "2",
++      iss_retido: false,
++      codigo_nbs: "115011000",
++    });
++  });
++
++  it("usa cnpj quando o tomador tem 14 dígitos", async () => {
++    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    await provider.emitir({
++      ...ENTRADA,
++      tomador: { ...ENTRADA.tomador, cpfCnpj: "12345678000199" },
++    });
++    const corpo = chamadas[0]!.corpo as Record<string, Record<string, unknown>>;
++    expect(corpo.tomador!.cnpj).toBe("12345678000199");
++    expect(corpo.tomador!.cpf).toBeUndefined();
++  });
++
++  it("devolve o resultado quando a Focus já responde autorizado", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    const r = await provider.emitir(ENTRADA);
++
++    expect(r).toEqual({
++      numeroNfse: "4321",
++      codigoVerificacao: "ABC123",
++      providerId: `focusnfe_${ENTRADA.referenciaExterna}`,
++      urlPdf: "https://homologacao.focusnfe.com.br/arquivos_development/danfse.pdf",
++      urlXml: "https://homologacao.focusnfe.com.br/arquivos_development/nfse.xml",
++    });
++  });
++
++  it("faz polling curto quando volta processando_autorizacao e resolve sem retry longo", async () => {
++    const { provider, chamadas } = criarProvider([
++      { status: 202, corpo: { status: "processando_autorizacao" } },
++      { status: 200, corpo: { status: "processando_autorizacao" } },
++      { status: 200, corpo: AUTORIZADA },
++    ]);
++    const r = await provider.emitir(ENTRADA);
++
++    expect(r.numeroNfse).toBe("4321");
++    expect(chamadas).toHaveLength(3);
++    expect(chamadas[1]!.metodo).toBe("GET");
++  });
++
++  it("lança transiente quando o polling curto esgota — devolve o controle ao backoff", async () => {
++    const { provider } = criarProvider([
++      { status: 202, corpo: { status: "processando_autorizacao" } },
++    ]);
++    await expect(provider.emitir(ENTRADA)).rejects.toBeInstanceOf(FiscalErrorTransient);
++  });
++
++  it("rejeição da prefeitura é PERMANENTE e preserva o payload bruto (regras 8 e 10)", async () => {
++    const corpoErro = {
++      status: "erro_autorizacao",
++      status_sefaz: "E123",
++      erros: [{ codigo: "E123", mensagem: "Inscrição municipal inválida" }],
++    };
++    const { provider } = criarProvider([{ status: 200, corpo: corpoErro }]);
++
++    const erro = await provider.emitir(ENTRADA).catch((e: unknown) => e);
++    expect(erro).toBeInstanceOf(FiscalErrorPermanent);
++    expect((erro as FiscalErrorPermanent).message).toContain("Inscrição municipal inválida");
++    expect((erro as FiscalErrorPermanent).payloadBruto).toMatchObject({ status_sefaz: "E123" });
++  });
++
++  it("422 de validação é PERMANENTE (retry não resolve)", async () => {
++    const { provider } = criarProvider([
++      { status: 422, corpo: { codigo: "requisicao_invalida", mensagem: "codigo_municipio ausente" } },
++    ]);
++    await expect(provider.emitir(ENTRADA)).rejects.toBeInstanceOf(FiscalErrorPermanent);
++  });
++
++  it("401 (token errado) é PERMANENTE — não queima as 4 tentativas", async () => {
++    const { provider } = criarProvider([
++      { status: 401, corpo: { codigo: "permissao_negada", mensagem: "token inválido" } },
++    ]);
++    await expect(provider.emitir(ENTRADA)).rejects.toBeInstanceOf(FiscalErrorPermanent);
++  });
++
++  it("500 e 429 são TRANSIENTES", async () => {
++    const { provider: p500 } = criarProvider([{ status: 500, corpo: {} }]);
++    await expect(p500.emitir(ENTRADA)).rejects.toBeInstanceOf(FiscalErrorTransient);
++
++    const { provider: p429 } = criarProvider([{ status: 429, corpo: {} }]);
++    await expect(p429.emitir(ENTRADA)).rejects.toBeInstanceOf(FiscalErrorTransient);
++  });
++
++  it("falha de rede vira TRANSIENTE classificado, nunca erro genérico", async () => {
++    const impl = (async () => {
++      throw new Error("ECONNRESET");
++    }) as unknown as typeof fetch;
++    const provider = new FocusNfeProvider({
++      token: "t",
++      ambiente: "homologacao",
++      fetchImpl: impl,
++    });
++    const erro = await provider.emitir(ENTRADA).catch((e: unknown) => e);
++    expect(erro).toBeInstanceOf(FiscalErrorTransient);
++    expect((erro as FiscalErrorTransient).codigo).toBe("rede");
++  });
++
++  it("corpo fora do contrato vira TRANSIENTE com o bruto preservado (regra 19)", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: { status: 42 } }]);
++    const erro = await provider.emitir(ENTRADA).catch((e: unknown) => e);
++    expect(erro).toBeInstanceOf(FiscalErrorTransient);
++    expect((erro as FiscalErrorTransient).codigo).toBe("contrato_invalido");
++  });
++
++  it("autorizado sem número não vira nota: transiente, sem inventar numeração", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: { status: "autorizado" } }]);
++    const erro = await provider.emitir(ENTRADA).catch((e: unknown) => e);
++    expect(erro).toBeInstanceOf(FiscalErrorTransient);
++    expect((erro as FiscalErrorTransient).codigo).toBe("resposta_incompleta");
++  });
++
++  it("status desconhecido é transiente MAS com código explícito para investigação", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: { status: "coisa_nova" } }]);
++    const erro = await provider.emitir(ENTRADA).catch((e: unknown) => e);
++    expect(erro).toBeInstanceOf(FiscalErrorTransient);
++    expect((erro as FiscalErrorTransient).codigo).toBe("status_desconhecido");
++  });
++
++  // O caso que a regra 7 existe para cobrir.
++  it("ref duplicada não vira erro: consulta e devolve a nota já emitida", async () => {
++    const { provider, chamadas } = criarProvider([
++      { status: 422, corpo: { codigo: "ref_duplicada", mensagem: "Referência já existe" } },
++      { status: 200, corpo: AUTORIZADA },
++    ]);
++    const r = await provider.emitir(ENTRADA);
++
++    expect(r.numeroNfse).toBe("4321");
++    expect(chamadas[1]!.metodo).toBe("GET");
++  });
++});
++
++// ---------------------------------------------------------------------------
++// consultarPorReferencia()
++// ---------------------------------------------------------------------------
++
++describe("FocusNfeProvider.consultarPorReferencia", () => {
++  it("404 devolve null — nota nunca chegou à Focus", async () => {
++    const { provider } = criarProvider([{ status: 404, corpo: { codigo: "nao_encontrado" } }]);
++    expect(await provider.consultarPorReferencia("ref-x")).toBeNull();
++  });
++
++  it("processando devolve null — motor decide o que fazer", async () => {
++    const { provider } = criarProvider([
++      { status: 200, corpo: { status: "processando_autorizacao" } },
++    ]);
++    expect(await provider.consultarPorReferencia("ref-x")).toBeNull();
++  });
++
++  it("autorizado devolve o resultado", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
++    const r = await provider.consultarPorReferencia("ref-x");
++    expect(r?.numeroNfse).toBe("4321");
++  });
++
++  it("cancelado NÃO é tratado como emitida", async () => {
++    const { provider } = criarProvider([{ status: 200, corpo: { status: "cancelado" } }]);
++    await expect(provider.consultarPorReferencia("ref-x")).rejects.toBeInstanceOf(
++      FiscalErrorPermanent,
++    );
++  });
++});
++
++// ---------------------------------------------------------------------------
++// Ambiente
++// ---------------------------------------------------------------------------
++
++describe("ambiente", () => {
++  it("produção usa api.focusnfe.com.br", async () => {
++    const { impl, chamadas } = fetchFalso([{ status: 200, corpo: AUTORIZADA }]);
++    const provider = new FocusNfeProvider({
++      token: "t",
++      ambiente: "producao",
++      fetchImpl: impl,
++      esperar: async () => {},
++    });
++    await provider.emitir(ENTRADA);
++    expect(chamadas[0]!.url).toContain("https://api.focusnfe.com.br/");
++  });
++});
+diff --git a/src/lib/fiscal/providers/focusnfe.ts b/src/lib/fiscal/providers/focusnfe.ts
+new file mode 100644
+index 0000000..ac0acfb
+--- /dev/null
++++ b/src/lib/fiscal/providers/focusnfe.ts
+@@ -0,0 +1,421 @@
++import { z } from "zod";
++import {
++  FiscalErrorPermanent,
++  FiscalErrorTransient,
++  type EmitirNfseInput,
++  type EmitirNfseResult,
++  type FiscalProvider,
++} from "../provider";
++
++/**
++ * Provider fiscal Focus NFe (regra 21 do CLAUDE.md).
++ *
++ * Docs: https://doc.focusnfe.com.br  ·  Endpoints usados:
++ *   POST   /v2/nfse?ref=REF   → envia a nota (assíncrono)
++ *   GET    /v2/nfse/REF       → consulta o resultado
++ *
++ * MODELO ASSÍNCRONO — importante para entender o desenho abaixo:
++ * o POST só confirma o RECEBIMENTO (`status: processando_autorizacao`); a
++ * autorização real da prefeitura chega depois. Este provider resolve isso
++ * SEM tocar no motor de retry (`src/inngest/functions/emitir-nfse.ts`):
++ *
++ *   1. `emitir()` faz o POST e, se voltar `processando_autorizacao`, faz um
++ *      polling CURTO e limitado (padrão: 5 tentativas × 2 s) — na prática a
++ *      maioria das notas autoriza nessa janela.
++ *   2. Se ainda estiver processando ao fim do polling curto, lança
++ *      `FiscalErrorTransient`. O motor então agenda o retry do produto
++ *      (5 min → 15 min → 1 h, regra 9) e, na tentativa seguinte, chama
++ *      `consultarPorReferencia()` ANTES de reemitir (regra 7) — que devolve
++ *      a nota já autorizada. Nenhuma nota duplicada é criada na prefeitura.
++ *
++ * IDEMPOTÊNCIA (regra 7): a `referenciaExterna` da nota é usada como `ref` da
++ * Focus, que é única por empresa. Se o POST for rejeitado por referência
++ * duplicada (tentativa anterior morreu depois de enviar), caímos na consulta
++ * em vez de tratar como erro.
++ *
++ * CLASSIFICAÇÃO DE ERROS (regra 8): 4xx de validação e rejeição da prefeitura
++ * são PERMANENTES; 429, 5xx, timeout e falha de rede são TRANSIENTES. Nunca
++ * lançamos erro genérico daqui.
++ */
++
++// ---------------------------------------------------------------------------
++// Configuração
++// ---------------------------------------------------------------------------
++
++export type FocusNfeAmbiente = "homologacao" | "producao";
++
++const BASE_URL: Record<FocusNfeAmbiente, string> = {
++  homologacao: "https://homologacao.focusnfe.com.br",
++  producao: "https://api.focusnfe.com.br",
++};
++
++export interface FocusNfeConfig {
++  token: string;
++  ambiente: FocusNfeAmbiente;
++  /** Timeout de cada request HTTP. */
++  timeoutMs?: number;
++  /** Polling curto dentro de emitir(): quantas consultas antes de desistir. */
++  tentativasPolling?: number;
++  /** Intervalo entre as consultas do polling curto. */
++  intervaloPollingMs?: number;
++  /** Injetável para teste (default: fetch global). */
++  fetchImpl?: typeof fetch;
++  /** Injetável para teste (default: setTimeout). */
++  esperar?: (ms: number) => Promise<void>;
++}
++
++// ---------------------------------------------------------------------------
++// Contrato de resposta da Focus NFe (regra 19: Zod na fronteira)
++// ---------------------------------------------------------------------------
++
++const erroFocusSchema = z.object({
++  codigo: z.string().nullish(),
++  mensagem: z.string().nullish(),
++  correcao: z.string().nullish(),
++});
++
++const nfseFocusSchema = z.object({
++  status: z.string().nullish(),
++  status_sefaz: z.string().nullish(),
++  mensagem_sefaz: z.string().nullish(),
++  numero: z.union([z.string(), z.number()]).nullish(),
++  codigo_verificacao: z.union([z.string(), z.number()]).nullish(),
++  ref: z.string().nullish(),
++  url: z.string().nullish(),
++  caminho_xml_nota_fiscal: z.string().nullish(),
++  caminho_danfse: z.string().nullish(),
++  /** Presente nos corpos de erro (400/401/404/422). */
++  codigo: z.string().nullish(),
++  mensagem: z.string().nullish(),
++  erros: z.array(erroFocusSchema).nullish(),
++});
++
++type NfseFocus = z.infer<typeof nfseFocusSchema>;
++
++/** Status terminais/possíveis documentados pela Focus NFe. */
++const STATUS_AUTORIZADO = "autorizado";
++const STATUS_PROCESSANDO = "processando_autorizacao";
++const STATUS_ERRO = "erro_autorizacao";
++const STATUS_CANCELADO = "cancelado";
++
++// ---------------------------------------------------------------------------
++// Helpers puros (exportados para teste)
++// ---------------------------------------------------------------------------
++
++/** Centavos → string decimal em reais, como a Focus espera ("1234.56"). */
++export function centavosParaReais(centavos: number): string {
++  if (!Number.isInteger(centavos)) {
++    throw new FiscalErrorPermanent(`Valor deve ser inteiro em centavos, recebido ${centavos}`);
++  }
++  return (centavos / 100).toFixed(2);
++}
++
++/**
++ * Alíquota de ISS: no nosso schema é FRAÇÃO (NUMERIC(5,4), 0.02 = 2%); a Focus
++ * espera PERCENTUAL na maioria dos municípios (o exemplo oficial de São Paulo
++ * usa "aliquota": "5" para 5%).
++ *
++ * VERIFICAR EM HOMOLOGAÇÃO antes de produção: alguns municípios integrados à
++ * Focus aceitam/exigem a fração. Se o município de teste rejeitar o valor
++ * (ou autorizar com ISS errado), é AQUI que se corrige — está isolado de
++ * propósito e coberto por teste.
++ */
++export function aliquotaIssParaPercentual(fracao: number): string {
++  return (fracao * 100).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
++}
++
++/** Monta a URL absoluta a partir do caminho relativo devolvido pela Focus. */
++export function urlAbsoluta(base: string, caminho: string | null | undefined): string | null {
++  if (!caminho) return null;
++  if (caminho.startsWith("http://") || caminho.startsWith("https://")) return caminho;
++  return `${base}${caminho.startsWith("/") ? "" : "/"}${caminho}`;
++}
++
++/** Junta os erros da Focus numa mensagem única legível para o log de tentativas. */
++export function mensagemDeErro(corpo: NfseFocus, fallback: string): string {
++  const doArray = (corpo.erros ?? [])
++    .map((e) => [e.codigo, e.mensagem, e.correcao].filter(Boolean).join(" — "))
++    .filter((s) => s.length > 0);
++  if (doArray.length > 0) return doArray.join(" | ");
++
++  const direto = [corpo.mensagem, corpo.mensagem_sefaz].filter(Boolean).join(" — ");
++  return direto.length > 0 ? direto : fallback;
++}
++
++/**
++ * Classificação de erro por status HTTP (regra 8).
++ * Transiente = vale a pena tentar de novo mais tarde.
++ */
++export function ehTransiente(statusHttp: number): boolean {
++  if (statusHttp === 429) return true; // rate limit
++  if (statusHttp === 408) return true; // request timeout
++  return statusHttp >= 500; // indisponibilidade da Focus/prefeitura
++}
++
++// ---------------------------------------------------------------------------
++// Provider
++// ---------------------------------------------------------------------------
++
++export class FocusNfeProvider implements FiscalProvider {
++  readonly nome = "focusnfe";
++
++  private readonly base: string;
++  private readonly autorizacao: string;
++  private readonly timeoutMs: number;
++  private readonly tentativasPolling: number;
++  private readonly intervaloPollingMs: number;
++  private readonly fetchImpl: typeof fetch;
++  private readonly esperar: (ms: number) => Promise<void>;
++
++  constructor(cfg: FocusNfeConfig) {
++    if (!cfg.token) {
++      throw new FiscalErrorPermanent(
++        "FOCUSNFE_TOKEN não configurado — defina a variável de ambiente antes de usar o provider focusnfe",
++      );
++    }
++    this.base = BASE_URL[cfg.ambiente];
++    // Basic auth: token como usuário, senha vazia (padrão da Focus NFe).
++    this.autorizacao = `Basic ${Buffer.from(`${cfg.token}:`).toString("base64")}`;
++    this.timeoutMs = cfg.timeoutMs ?? 20_000;
++    this.tentativasPolling = cfg.tentativasPolling ?? 5;
++    this.intervaloPollingMs = cfg.intervaloPollingMs ?? 2_000;
++    this.fetchImpl = cfg.fetchImpl ?? fetch;
++    this.esperar = cfg.esperar ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
++  }
++
++  // -------------------------------------------------------------------------
++  // FiscalProvider
++  // -------------------------------------------------------------------------
++
++  async emitir(input: EmitirNfseInput): Promise<EmitirNfseResult> {
++    const ref = input.referenciaExterna;
++    const envio = await this.requisitar("POST", `/v2/nfse?ref=${encodeURIComponent(ref)}`, {
++      corpo: this.montarPayload(input),
++    });
++
++    // Referência já usada: uma tentativa anterior enviou e morreu antes de
++    // confirmar. NÃO é erro — é exatamente o caso que a idempotência cobre.
++    if (envio.statusHttp === 422 && this.pareceReferenciaDuplicada(envio.corpo)) {
++      const existente = await this.consultarPorReferencia(ref);
++      if (existente) return existente;
++      return this.aguardarAutorizacao(ref);
++    }
++
++    if (envio.statusHttp >= 400) {
++      throw this.erroDeResposta(envio.statusHttp, envio.corpo, `Focus NFe recusou o envio da nota`);
++    }
++
++    const resultado = this.interpretar(envio.corpo, ref);
++    if (resultado) return resultado;
++
++    // Ainda processando: polling curto e, se não resolver, transiente.
++    return this.aguardarAutorizacao(ref);
++  }
++
++  async consultarPorReferencia(referenciaExterna: string): Promise<EmitirNfseResult | null> {
++    const resp = await this.requisitar(
++      "GET",
++      `/v2/nfse/${encodeURIComponent(referenciaExterna)}`,
++    );
++
++    // Nunca enviada (ou já expurgada): o motor segue e emite normalmente.
++    if (resp.statusHttp === 404) return null;
++
++    if (resp.statusHttp >= 400) {
++      throw this.erroDeResposta(
++        resp.statusHttp,
++        resp.corpo,
++        `Focus NFe falhou ao consultar a referência ${referenciaExterna}`,
++      );
++    }
++
++    return this.interpretar(resp.corpo, referenciaExterna);
++  }
++
++  // -------------------------------------------------------------------------
++  // Internos
++  // -------------------------------------------------------------------------
++
++  /**
++   * Traduz o corpo da Focus no resultado do nosso domínio.
++   * - `autorizado`            → resultado
++   * - `processando_autorizacao` → null (ainda não deu; quem chama decide)
++   * - `erro_autorizacao`      → FiscalErrorPermanent (rejeição da prefeitura)
++   * - `cancelado`             → FiscalErrorPermanent (não é emissão válida)
++   */
++  private interpretar(corpo: NfseFocus, ref: string): EmitirNfseResult | null {
++    const status = corpo.status ?? null;
++
++    if (status === STATUS_AUTORIZADO) {
++      const numero = corpo.numero;
++      if (numero === null || numero === undefined || String(numero).length === 0) {
++        // Autorizado sem número é resposta incoerente da API — não inventamos
++        // número de nota fiscal. Transiente: uma nova consulta costuma resolver.
++        throw new FiscalErrorTransient(
++          `Focus NFe devolveu status autorizado sem número para a referência ${ref}`,
++          "resposta_incompleta",
++          corpo,
++        );
++      }
++      return {
++        numeroNfse: String(numero),
++        codigoVerificacao:
++          corpo.codigo_verificacao === null || corpo.codigo_verificacao === undefined
++            ? null
++            : String(corpo.codigo_verificacao),
++        providerId: `focusnfe_${ref}`,
++        urlPdf: urlAbsoluta(this.base, corpo.caminho_danfse) ?? corpo.url ?? null,
++        urlXml: urlAbsoluta(this.base, corpo.caminho_xml_nota_fiscal),
++      };
++    }
++
++    if (status === STATUS_ERRO) {
++      throw new FiscalErrorPermanent(
++        mensagemDeErro(corpo, `Prefeitura rejeitou a nota (referência ${ref})`),
++        corpo.status_sefaz ?? STATUS_ERRO,
++        corpo,
++      );
++    }
++
++    if (status === STATUS_CANCELADO) {
++      throw new FiscalErrorPermanent(
++        `Nota da referência ${ref} está cancelada na Focus NFe — não pode ser tratada como emitida`,
++        STATUS_CANCELADO,
++        corpo,
++      );
++    }
++
++    if (status === STATUS_PROCESSANDO || status === null) return null;
++
++    // Status desconhecido: não assumimos nada (regra 8 — nada de "assumir
++    // transiente silenciosamente"); é transiente MAS com código explícito
++    // para aparecer no log de tentativas e ser investigado.
++    throw new FiscalErrorTransient(
++      `Status não reconhecido da Focus NFe: "${status}" (referência ${ref})`,
++      "status_desconhecido",
++      corpo,
++    );
++  }
++
++  /** Polling curto: resolve o caso comum (autoriza em segundos) sem retry longo. */
++  private async aguardarAutorizacao(ref: string): Promise<EmitirNfseResult> {
++    for (let i = 0; i < this.tentativasPolling; i++) {
++      await this.esperar(this.intervaloPollingMs);
++      const resultado = await this.consultarPorReferencia(ref);
++      if (resultado) return resultado;
++    }
++
++    // Transiente de propósito: devolve o controle ao backoff do produto
++    // (5 min → 15 min → 1 h). A próxima tentativa começa pela consulta.
++    throw new FiscalErrorTransient(
++      `Focus NFe ainda processando a autorização da referência ${ref} — nova consulta no próximo retry`,
++      STATUS_PROCESSANDO,
++      { ref },
++    );
++  }
++
++  private pareceReferenciaDuplicada(corpo: NfseFocus): boolean {
++    const texto = `${corpo.codigo ?? ""} ${corpo.mensagem ?? ""}`.toLowerCase();
++    return texto.includes("duplicad") || texto.includes("ja existe") || texto.includes("já existe");
++  }
++
++  private erroDeResposta(statusHttp: number, corpo: NfseFocus, fallback: string) {
++    const mensagem = `${mensagemDeErro(corpo, fallback)} (HTTP ${statusHttp})`;
++    const codigo = corpo.codigo ?? String(statusHttp);
++    return ehTransiente(statusHttp)
++      ? new FiscalErrorTransient(mensagem, codigo, corpo)
++      : new FiscalErrorPermanent(mensagem, codigo, corpo);
++  }
++
++  private async requisitar(
++    metodo: "GET" | "POST",
++    caminho: string,
++    opts?: { corpo?: unknown },
++  ): Promise<{ statusHttp: number; corpo: NfseFocus }> {
++    let resposta: Response;
++    try {
++      resposta = await this.fetchImpl(`${this.base}${caminho}`, {
++        method: metodo,
++        headers: {
++          Authorization: this.autorizacao,
++          "Content-Type": "application/json",
++        },
++        body: opts?.corpo === undefined ? undefined : JSON.stringify(opts.corpo),
++        signal: AbortSignal.timeout(this.timeoutMs),
++        cache: "no-store",
++      });
++    } catch (e) {
++      // Timeout / DNS / conexão recusada — sempre transiente (regra 8).
++      throw new FiscalErrorTransient(
++        `Falha de rede ao chamar a Focus NFe (${metodo} ${caminho}): ${
++          e instanceof Error ? e.message : String(e)
++        }`,
++        "rede",
++        null,
++      );
++    }
++
++    const bruto: unknown = await resposta.json().catch(() => ({}));
++    const parse = nfseFocusSchema.safeParse(bruto);
++    if (!parse.success) {
++      // Corpo fora do contrato: transiente (pode ser página de erro/manutenção
++      // servida pelo proxy da Focus), mas com o payload bruto preservado.
++      throw new FiscalErrorTransient(
++        `Resposta da Focus NFe fora do formato esperado (HTTP ${resposta.status})`,
++        "contrato_invalido",
++        bruto,
++      );
++    }
++
++    return { statusHttp: resposta.status, corpo: parse.data };
++  }
++
++  /**
++   * Traduz o nosso `EmitirNfseInput` no JSON da Focus NFe.
++   *
++   * PENDÊNCIA CONSCIENTE (item C5 da auditoria): a Focus já aceita os campos
++   * estruturados da reforma (`ibs_cbs_classificacao_tributaria` = cClassTrib,
++   * `codigo_indicador_operacao`). NÃO os enviamos ainda porque o sistema não
++   * modela CST/cClassTrib — o `regime_ibscbs` que temos é um agregado nosso,
++   * não um código da tabela oficial, e mapear um para o outro sem a NT
++   * 007/2026 lida na íntegra seria inventar enquadramento fiscal. Enquanto
++   * isso não for resolvido, esses campos ficam ausentes e a nota sai com o
++   * tratamento padrão do município. NÃO promover para produção sem fechar isso.
++   */
++  private montarPayload(input: EmitirNfseInput): Record<string, unknown> {
++    const { prestador, tomador, servico } = input;
++    const ehCnpj = tomador.cpfCnpj.replace(/\D/g, "").length === 14;
++
++    return {
++      data_emissao: `${servico.competencia}T00:00:00`,
++      prestador: {
++        cnpj: prestador.cnpj,
++        inscricao_municipal: prestador.inscricaoMunicipal ?? undefined,
++        codigo_municipio: prestador.codigoMunicipioIbge,
++      },
++      tomador: {
++        [ehCnpj ? "cnpj" : "cpf"]: tomador.cpfCnpj,
++        razao_social: tomador.nome,
++        email: tomador.email ?? undefined,
++        endereco: Object.keys(tomador.endereco).length > 0 ? tomador.endereco : undefined,
++      },
++      servico: {
++        discriminacao: servico.descricao,
++        item_lista_servico: servico.codigoServico,
++        valor_servicos: centavosParaReais(servico.valorCentavos),
++        aliquota: aliquotaIssParaPercentual(servico.aliquotaIss),
++        iss_retido: servico.issRetido,
++        // Reforma: o NBS o sistema já tem e é aceito pela Focus.
++        codigo_nbs: servico.codigoNbs ?? undefined,
++      },
++    };
++  }
++}
++
++/** Fábrica usada pelo registry — lê o ambiente validado em src/lib/env.ts. */
++export function criarFocusNfeProvider(cfg: {
++  token: string;
++  ambiente: FocusNfeAmbiente;
++}): FocusNfeProvider {
++  return new FocusNfeProvider(cfg);
++}
+diff --git a/src/lib/fiscal/providers/index.ts b/src/lib/fiscal/providers/index.ts
+index 886a5ba..55117de 100644
+--- a/src/lib/fiscal/providers/index.ts
++++ b/src/lib/fiscal/providers/index.ts
+@@ -1,13 +1,19 @@
+ import { type FiscalProvider } from "../provider";
+ import { MockFiscalProvider } from "./mock";
++import { FocusNfeProvider } from "./focusnfe";
++import { focusNfeEnv } from "@/lib/env";
+ 
+ /**
+  * Registry de providers fiscais (regra 21 do CLAUDE.md).
+  * O resto do sistema resolve o provider pelo nome salvo em empresas.provider_fiscal.
++ *
++ * As factories são preguiçosas de propósito: só quem realmente usa a Focus NFe
++ * exige as variáveis de ambiente dela — um tenant em `mock` não pode quebrar
++ * porque FOCUSNFE_TOKEN não está definido.
+  */
+ const providers: Record<string, () => FiscalProvider> = {
+   mock: () => new MockFiscalProvider(),
+-  // focusnfe: () => new FocusNfeProvider(),      // TODO: implementar
++  focusnfe: () => new FocusNfeProvider(focusNfeEnv()),
+   // nuvemfiscal: () => new NuvemFiscalProvider(), // TODO: implementar
+ };
+ 
+-- 
+2.43.0
+
