@@ -1,0 +1,612 @@
+From 3d0be0604f8a323a11e8e0fe54aae3fe827ef718 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Thu, 6 Aug 2026 17:23:03 +0000
+Subject: [PATCH] feat(fiscal): caminho de dados do grupo IBSCBS completo,
+ ponta a ponta
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fecha o item B3 da auditoria pos-C5 (Critico n2). Ate agora a declaracao do
+grupo IBSCBS existia como tipo, era validada contra a tabela oficial e tinha
+colunas no banco — mas nao havia caminho ligando as tres coisas. So era
+preenchivel chamando o provider direto de um teste. Agora vai da API ao XML.
+
+services/notas.ts
+- solicitarEmissaoSchema aceita `declaracaoIbsCbs` (opcional: nao ha data
+  confirmada de obrigatoriedade de preenchimento do grupo na NFS-e).
+- VALIDACAO NA CRIACAO, nao so na emissao. Se a declaracao so fosse conferida
+  pelo provider, uma nota com enquadramento invalido seria criada, entraria na
+  maquina de estados e so falharia minutos depois no motor — com o usuario ja
+  fora da tela. Validando na fronteira (regra 19), o erro volta enquanto ele
+  ainda esta no formulario e NENHUMA nota chega a existir.
+- Persiste nas oito colunas. Os CHECKs e a FK composta do banco continuam como
+  segunda camada: mesmo que a validacao da aplicacao falhe por bug, o insert e
+  recusado.
+
+lib/fiscal/ibscbs.ts — declaracaoDeColunas()
+A ponte entre o que foi PERSISTIDO na criacao e o que e DECLARADO na emissao.
+Escrevi primeiro dentro da funcao Inngest e movi para o dominio: se ela errar,
+a declaracao fica gravada no banco e some no caminho para a prefeitura, sem
+erro nenhum — o tipo de falha que so aparece numa conferencia de XML. No
+dominio ela e testavel sem mock, e agora tem teste.
+
+inngest/functions/emitir-nfse.ts — reconstroi a declaracao das colunas e
+passa ao provider. Duas linhas; a maquina de estados e o backoff intactos.
+
+Correcao de tipo aproveitada: SolicitarEmissaoInput era z.infer (a SAIDA do
+schema, com defaults ja aplicados), o que obrigava quem chama a preencher
+`regimeIbsCbs` mesmo existindo default. Passou a ser z.input, que e o que a
+funcao realmente aceita — ela faz o parse() por dentro.
+
+12 testes novos (172 no total, eram 160):
+- schema aceita declaracao bem formada e recusa formato invalido;
+- codigo inexistente e prefixo divergente sao recusados e NENHUMA nota e
+  criada (o teste afirma o insert que nao aconteceu, nao so a excecao);
+- sem declaracao as colunas ficam nulas e a tabela de dominio nem e consultada;
+- declaracaoDeColunas: par minimo, gTribRegular e gDif, e o caso do percentual
+  de diferimento ZERO, que um teste de veracidade descuidado confundiria com
+  "ausente";
+- o que e reconstruido continua passando na propria validarDeclaracao.
+
+PENDENCIAS_C5: o caminho de dados fecha. Falta a UI — nenhum formulario coleta
+CST/cClassTrib ainda, so a API.
+
+DoD: typecheck OK, lint OK, test OK (172), build OK.
+---
+ src/inngest/functions/emitir-nfse.ts |  5 ++
+ src/lib/fiscal/ibscbs.test.ts        | 73 +++++++++++++++++++++
+ src/lib/fiscal/ibscbs.ts             | 58 +++++++++++++++--
+ src/services/dominio-fiscal.test.ts  | 96 +++++++++++++++++++++++++++-
+ src/services/notas.test.ts           | 28 ++++++++
+ src/services/notas.ts                | 45 ++++++++++++-
+ src/types/database.ts                | 78 ++++++++++++++++++++++
+ 7 files changed, 377 insertions(+), 6 deletions(-)
+
+diff --git a/src/inngest/functions/emitir-nfse.ts b/src/inngest/functions/emitir-nfse.ts
+index 0b6b5d6..af0700f 100644
+--- a/src/inngest/functions/emitir-nfse.ts
++++ b/src/inngest/functions/emitir-nfse.ts
+@@ -9,6 +9,7 @@ import {
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { resolverProvider } from "@/lib/fiscal/providers";
+ import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
++import { declaracaoDeColunas } from "@/lib/fiscal/ibscbs";
+ import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
+ import {
+   FiscalErrorPermanent,
+@@ -136,6 +137,9 @@ export const emitirNfse = inngest.createFunction(
+                 competencia: contexto.competencia,
+                 codigoNbs: contexto.codigo_nbs,
+                 reforma: {
++                  // Grupo IBSCBS gravado na criação da nota. Reconstruído a
++                  // partir das colunas — nunca inventado aqui.
++                  declaracao: declaracaoDeColunas(contexto),
+                   regime: contexto.regime_ibscbs as RegimeIbsCbs,
+                   cbsAliquota: Number(contexto.cbs_aliquota),
+                   ibsAliquota: Number(contexto.ibs_aliquota),
+@@ -401,3 +405,4 @@ function delayParaTentativa(tentativa: number): (typeof RETRY_DELAYS)[number] {
+   }
+   return delay;
+ }
++
+diff --git a/src/lib/fiscal/ibscbs.test.ts b/src/lib/fiscal/ibscbs.test.ts
+index b29b24a..c854408 100644
+--- a/src/lib/fiscal/ibscbs.test.ts
++++ b/src/lib/fiscal/ibscbs.test.ts
+@@ -9,6 +9,7 @@ import {
+   TOTAL_CCLASSTRIB_NFSE,
+   aliquotaEfetiva,
+   buscarCst,
++  declaracaoDeColunas,
+   declaracaoIbsCbsSchema,
+   validarDeclaracao,
+   type DeclaracaoTributariaIBSCBS,
+@@ -228,3 +229,75 @@ describe("pendências do C5", () => {
+     expect(PENDENCIAS_C5.join(" ")).toContain("contador");
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// A ponte persistência → emissão. Se ela errar, a declaração fica gravada no
++// banco e some no caminho para a prefeitura, sem erro nenhum.
++// ---------------------------------------------------------------------------
++
++const COLUNAS_VAZIAS = {
++  ibscbs_cst: null,
++  ibscbs_cclasstrib: null,
++  ibscbs_ccredpres: null,
++  ibscbs_trib_reg_cst: null,
++  ibscbs_trib_reg_cclasstrib: null,
++  ibscbs_dif_perc_uf: null,
++  ibscbs_dif_perc_mun: null,
++  ibscbs_dif_perc_cbs: null,
++};
++
++describe("declaracaoDeColunas", () => {
++  it("nota sem grupo IBSCBS devolve null", () => {
++    expect(declaracaoDeColunas(COLUNAS_VAZIAS)).toBeNull();
++  });
++
++  it("reconstrói o par mínimo", () => {
++    expect(
++      declaracaoDeColunas({ ...COLUNAS_VAZIAS, ibscbs_cst: "200", ibscbs_cclasstrib: "200027" }),
++    ).toEqual({
++      cst: "200",
++      cClassTrib: "200027",
++      cCredPres: null,
++      tribRegular: null,
++      diferimento: null,
++    });
++  });
++
++  it("reconstrói gTribRegular e gDif quando presentes", () => {
++    const d = declaracaoDeColunas({
++      ibscbs_cst: "510",
++      ibscbs_cclasstrib: "510001",
++      ibscbs_ccredpres: "07",
++      ibscbs_trib_reg_cst: "000",
++      ibscbs_trib_reg_cclasstrib: "000001",
++      ibscbs_dif_perc_uf: 1,
++      ibscbs_dif_perc_mun: 0.5,
++      ibscbs_dif_perc_cbs: null,
++    });
++    expect(d?.cCredPres).toBe("07");
++    expect(d?.tribRegular).toEqual({ cstRegular: "000", cClassTribRegular: "000001" });
++    expect(d?.diferimento).toEqual({ percentualUf: 1, percentualMun: 0.5, percentualCbs: null });
++  });
++
++  // Zero é um percentual legítimo de diferimento — não pode ser confundido
++  // com "ausente" por um teste de veracidade descuidado.
++  it("percentual de diferimento zero não some", () => {
++    const d = declaracaoDeColunas({
++      ...COLUNAS_VAZIAS,
++      ibscbs_cst: "510",
++      ibscbs_cclasstrib: "510001",
++      ibscbs_dif_perc_cbs: 0,
++    });
++    expect(d?.diferimento).toEqual({ percentualUf: null, percentualMun: null, percentualCbs: 0 });
++  });
++
++  // O que sai daqui tem que passar na própria validação do domínio.
++  it("o que é reconstruído continua válido para validarDeclaracao", () => {
++    const d = declaracaoDeColunas({
++      ...COLUNAS_VAZIAS,
++      ibscbs_cst: "200",
++      ibscbs_cclasstrib: "200027",
++    })!;
++    expect(validarDeclaracao(d).valido).toBe(true);
++  });
++});
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+index a9b8739..8caf05b 100644
+--- a/src/lib/fiscal/ibscbs.ts
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -334,6 +334,56 @@ export function validarDeclaracao(
+   return { valido: erros.length === 0, erros };
+ }
+ 
++/**
++ * Reconstrói a declaração a partir das colunas de `notas_fiscais`.
++ *
++ * É a ponte entre o que foi PERSISTIDO na criação e o que é DECLARADO na
++ * emissão. Se ela errar, a declaração fica gravada no banco e some no caminho
++ * para a prefeitura — falha silenciosa, sem erro nenhum. Por isso vive aqui,
++ * no domínio puro, e não dentro da função Inngest: assim é testável sem mock.
++ *
++ * `null` quando o CST não foi declarado — o caso normal hoje. O par
++ * CST/cClassTrib é garantido por CHECK no banco, então se um existe o outro
++ * também existe; a checagem dupla abaixo é defensiva.
++ */
++export function declaracaoDeColunas(nota: {
++  ibscbs_cst: string | null;
++  ibscbs_cclasstrib: string | null;
++  ibscbs_ccredpres: string | null;
++  ibscbs_trib_reg_cst: string | null;
++  ibscbs_trib_reg_cclasstrib: string | null;
++  ibscbs_dif_perc_uf: number | null;
++  ibscbs_dif_perc_mun: number | null;
++  ibscbs_dif_perc_cbs: number | null;
++}): DeclaracaoTributariaIBSCBS | null {
++  if (!nota.ibscbs_cst || !nota.ibscbs_cclasstrib) return null;
++
++  const temDiferimento =
++    nota.ibscbs_dif_perc_uf !== null ||
++    nota.ibscbs_dif_perc_mun !== null ||
++    nota.ibscbs_dif_perc_cbs !== null;
++
++  return {
++    cst: nota.ibscbs_cst,
++    cClassTrib: nota.ibscbs_cclasstrib,
++    cCredPres: nota.ibscbs_ccredpres,
++    tribRegular:
++      nota.ibscbs_trib_reg_cst && nota.ibscbs_trib_reg_cclasstrib
++        ? {
++            cstRegular: nota.ibscbs_trib_reg_cst,
++            cClassTribRegular: nota.ibscbs_trib_reg_cclasstrib,
++          }
++        : null,
++    diferimento: temDiferimento
++      ? {
++          percentualUf: nota.ibscbs_dif_perc_uf,
++          percentualMun: nota.ibscbs_dif_perc_mun,
++          percentualCbs: nota.ibscbs_dif_perc_cbs,
++        }
++      : null,
++  };
++}
++
+ // ---------------------------------------------------------------------------
+ // PENDÊNCIAS DO C5 — o que a pesquisa deixou EXPLICITAMENTE em aberto.
+ //
+@@ -342,10 +392,10 @@ export function validarDeclaracao(
+ // ---------------------------------------------------------------------------
+ 
+ export const PENDENCIAS_C5 = [
+-  "A validação contra a tabela oficial está ATIVA no caminho de emissão " +
+-    "(services/dominio-fiscal.ts, injetado pelo motor no resolverProvider). " +
+-    "Falta ativá-la também na CRIAÇÃO da nota: hoje a declaração só é " +
+-    "conferida na hora de emitir, não quando o usuário a informa.",
++  "O caminho de dados do grupo IBSCBS está COMPLETO: schema aceita, " +
++    "validação roda na criação e na emissão, colunas persistem com FK e " +
++    "CHECKs no banco, e o motor reconstrói e envia. Falta a UI: nenhum " +
++    "formulário coleta CST/cClassTrib ainda — só a API.",
+   "As colunas de redução, os indicadores e o tipo de alíquota JÁ FORAM " +
+     "PREENCHIDOS (migration de complemento). Falta usar `perc_reducao_ibs`/" +
+     "`perc_reducao_cbs` no cálculo: hoje a redução ainda vem do enum " +
+diff --git a/src/services/dominio-fiscal.test.ts b/src/services/dominio-fiscal.test.ts
+index 61f65b7..78ae7c0 100644
+--- a/src/services/dominio-fiscal.test.ts
++++ b/src/services/dominio-fiscal.test.ts
+@@ -1,10 +1,14 @@
+-import { describe, it, expect, beforeEach } from "vitest";
++import { describe, it, expect, beforeEach, vi } from "vitest";
+ import {
+   carregarCClassTribConhecidos,
+   limparCacheDominioFiscal,
+ } from "@/services/dominio-fiscal";
+ import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
+ 
++// Sem rede ao importar o módulo de notas (que instancia o cliente Inngest).
++vi.mock("@/inngest/client", () => ({ inngest: { send: vi.fn() } }));
++import { solicitarEmissao } from "@/services/notas";
++
+ /**
+  * Fake mínimo com contador de chamadas — o ponto do cache é justamente NÃO
+  * bater no banco a cada tentativa de emissão, então isso precisa ser medido.
+@@ -95,3 +99,93 @@ describe("carregarCClassTribConhecidos", () => {
+     expect(chamadas).toBe(2);
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// Integração: solicitarEmissao valida a declaração ANTES de criar a nota.
++// O ponto: sem isso, uma nota com enquadramento inválido seria criada, entraria
++// na máquina de estados, e só falharia minutos depois no motor.
++// ---------------------------------------------------------------------------
++
++describe("solicitarEmissao com grupo IBSCBS", () => {
++  beforeEach(() => limparCacheDominioFiscal());
++
++  const entrada = {
++    empresaId: "22222222-2222-2222-2222-222222222222",
++    clienteId: "33333333-3333-3333-3333-333333333333",
++    descricaoServico: "Consultoria",
++    codigoServico: "01.05",
++    valorServicoCentavos: 15_000,
++    aliquotaIss: 0.05,
++    issRetido: false,
++    competencia: "2026-07-18",
++  };
++
++  /** Fake que responde a tabela de domínio e ao insert da nota. */
++  function bancoComDominio(codigos: string[]) {
++    const inserts: unknown[] = [];
++    const db = fakeSupabase((ctx): FakeResult => {
++      if (ctx.table === "cclasstrib_ibscbs") {
++        return { data: codigos.map((codigo) => ({ codigo })), error: null };
++      }
++      if (ctx.op === "insert") {
++        inserts.push(ctx.payload);
++        return {
++          data: { id: "44444444-4444-4444-4444-444444444444", empresa_id: entrada.empresaId },
++          error: null,
++        };
++      }
++      return { data: null, error: null };
++    });
++    return { db, inserts };
++  }
++
++  it("persiste a declaração nas colunas quando o código é válido", async () => {
++    const { db, inserts } = bancoComDominio(["200027"]);
++    await solicitarEmissao(db, {
++      ...entrada,
++      declaracaoIbsCbs: { cst: "200", cClassTrib: "200027" },
++    });
++
++    expect(inserts).toHaveLength(1);
++    expect(inserts[0]).toMatchObject({
++      ibscbs_cst: "200",
++      ibscbs_cclasstrib: "200027",
++    });
++  });
++
++  it("recusa código inexistente e NÃO cria a nota", async () => {
++    const { db, inserts } = bancoComDominio(["200027"]);
++
++    await expect(
++      solicitarEmissao(db, {
++        ...entrada,
++        declaracaoIbsCbs: { cst: "200", cClassTrib: "200999" },
++      }),
++    ).rejects.toThrow(/Grupo IBS\/CBS inválido/);
++
++    // O ponto do teste: nenhuma nota chegou a existir.
++    expect(inserts).toHaveLength(0);
++  });
++
++  it("recusa prefixo divergente antes de tocar o banco", async () => {
++    const { db, inserts } = bancoComDominio(["000001"]);
++    await expect(
++      solicitarEmissao(db, {
++        ...entrada,
++        declaracaoIbsCbs: { cst: "200", cClassTrib: "000001" },
++      }),
++    ).rejects.toThrow(/Grupo IBS\/CBS inválido/);
++    expect(inserts).toHaveLength(0);
++  });
++
++  it("sem declaração, as colunas do grupo ficam nulas e a tabela nem é consultada", async () => {
++    const { db, inserts } = bancoComDominio([]);
++    await solicitarEmissao(db, entrada);
++
++    expect(inserts).toHaveLength(1);
++    expect(inserts[0]).toMatchObject({
++      ibscbs_cst: null,
++      ibscbs_cclasstrib: null,
++    });
++  });
++});
+diff --git a/src/services/notas.test.ts b/src/services/notas.test.ts
+index 4ef9165..c6708ec 100644
+--- a/src/services/notas.test.ts
++++ b/src/services/notas.test.ts
+@@ -37,3 +37,31 @@ describe("solicitarEmissaoSchema", () => {
+     expect(() => solicitarEmissaoSchema.parse({ ...base, aliquotaIss: 2 })).toThrow();
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// Grupo IBSCBS na criação da nota
++// ---------------------------------------------------------------------------
++
++describe("solicitarEmissaoSchema — grupo IBSCBS", () => {
++  it("nota sem declaração continua válida (o grupo é opcional)", () => {
++    const r = solicitarEmissaoSchema.parse(base);
++    expect(r.declaracaoIbsCbs).toBeUndefined();
++  });
++
++  it("aceita uma declaração bem formada", () => {
++    const r = solicitarEmissaoSchema.parse({
++      ...base,
++      declaracaoIbsCbs: { cst: "200", cClassTrib: "200027" },
++    });
++    expect(r.declaracaoIbsCbs?.cClassTrib).toBe("200027");
++  });
++
++  it("rejeita CST e cClassTrib com formato inválido já no schema", () => {
++    expect(() =>
++      solicitarEmissaoSchema.parse({ ...base, declaracaoIbsCbs: { cst: "20", cClassTrib: "200027" } }),
++    ).toThrow();
++    expect(() =>
++      solicitarEmissaoSchema.parse({ ...base, declaracaoIbsCbs: { cst: "200", cClassTrib: "2000" } }),
++    ).toThrow();
++  });
++});
+diff --git a/src/services/notas.ts b/src/services/notas.ts
+index d4c33a3..3590452 100644
+--- a/src/services/notas.ts
++++ b/src/services/notas.ts
+@@ -4,6 +4,8 @@ import { inngest } from "@/inngest/client";
+ import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
+ import { type Database } from "@/types/database";
+ import { REGIME_IBSCBS, calcularTributosReforma } from "@/lib/fiscal/reforma";
++import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
++import { carregarCClassTribConhecidos } from "./dominio-fiscal";
+ 
+ /**
+  * Ponto de entrada da emissão (regra 5 do CLAUDE.md):
+@@ -27,9 +29,23 @@ export const solicitarEmissaoSchema = z.object({
+   // Split payment: preenchidos só quando a liquidação retiver CBS/IBS na fonte
+   valorLiquidoCentavos: z.number().int().nonnegative().nullish(),
+   splitRetidoCentavos: z.number().int().nonnegative().nullish(),
++  /**
++   * Grupo IBSCBS da DPS (CST, cClassTrib e subgrupos condicionais).
++   * Opcional: não há data confirmada de obrigatoriedade de preenchimento do
++   * grupo na NFS-e, então nota sem ele continua válida.
++   */
++  declaracaoIbsCbs: declaracaoIbsCbsSchema.nullish(),
+ });
+ 
+-export type SolicitarEmissaoInput = z.infer<typeof solicitarEmissaoSchema>;
++/**
++ * Entrada de `solicitarEmissao` — o tipo de ENTRADA do schema, não o de saída.
++ * A função faz o `parse()` internamente, então quem chama não precisa aplicar
++ * os defaults (`issRetido`, `regimeIbsCbs`) antes: é o schema que aplica.
++ */
++export type SolicitarEmissaoInput = z.input<typeof solicitarEmissaoSchema>;
++
++/** Já validada e com defaults aplicados — o que de fato vai para o banco. */
++export type SolicitarEmissaoValidada = z.output<typeof solicitarEmissaoSchema>;
+ 
+ export async function solicitarEmissao(
+   db: SupabaseClient<Database>,
+@@ -37,6 +53,23 @@ export async function solicitarEmissao(
+ ): Promise<{ notaId: string }> {
+   const dados = solicitarEmissaoSchema.parse(input);
+ 
++  // Grupo IBSCBS: validado AQUI, na criação, e não só na emissão.
++  //
++  // Por que aqui também: se a declaração só fosse conferida pelo provider, uma
++  // nota com enquadramento inválido seria criada, entraria na máquina de
++  // estados e só falharia minutos depois, no motor — com o usuário já fora da
++  // tela. Validando na fronteira (regra 19), o erro volta enquanto ele ainda
++  // está no formulário e nenhuma nota chega a existir.
++  const declaracao = dados.declaracaoIbsCbs ?? null;
++  if (declaracao) {
++    const validacao = validarDeclaracao(declaracao, {
++      cClassTribConhecidos: await carregarCClassTribConhecidos(db),
++    });
++    if (!validacao.valido) {
++      throw new Error(`Grupo IBS/CBS inválido: ${validacao.erros.join("; ")}`);
++    }
++  }
++
+   // Destaque de CBS/IBS calculado na criação, a partir do valor, competência e regime.
+   const tributos = calcularTributosReforma({
+     baseCentavos: dados.valorServicoCentavos,
+@@ -63,6 +96,16 @@ export async function solicitarEmissao(
+       ibs_valor_centavos: tributos.ibsValorCentavos,
+       valor_liquido_centavos: dados.valorLiquidoCentavos ?? null,
+       split_retido_centavos: dados.splitRetidoCentavos ?? null,
++      // Grupo IBSCBS — os CHECKs e a FK composta do banco são a segunda
++      // camada: mesmo que a validação acima falhe por bug, o insert é recusado.
++      ibscbs_cst: declaracao?.cst ?? null,
++      ibscbs_cclasstrib: declaracao?.cClassTrib ?? null,
++      ibscbs_ccredpres: declaracao?.cCredPres ?? null,
++      ibscbs_trib_reg_cst: declaracao?.tribRegular?.cstRegular ?? null,
++      ibscbs_trib_reg_cclasstrib: declaracao?.tribRegular?.cClassTribRegular ?? null,
++      ibscbs_dif_perc_uf: declaracao?.diferimento?.percentualUf ?? null,
++      ibscbs_dif_perc_mun: declaracao?.diferimento?.percentualMun ?? null,
++      ibscbs_dif_perc_cbs: declaracao?.diferimento?.percentualCbs ?? null,
+       status: "pendente",
+     })
+     .select("id, empresa_id")
+diff --git a/src/types/database.ts b/src/types/database.ts
+index 9b9ed6a..826f432 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -426,6 +426,15 @@ export type Database = {
+           fatura_excedente_id: string | null
+           ibs_aliquota: number
+           ibs_valor_centavos: number
++          ibscbs_cclasstrib: string | null
++          ibscbs_cclasstrib_vale_nfse: boolean | null
++          ibscbs_ccredpres: string | null
++          ibscbs_cst: string | null
++          ibscbs_dif_perc_cbs: number | null
++          ibscbs_dif_perc_mun: number | null
++          ibscbs_dif_perc_uf: number | null
++          ibscbs_trib_reg_cclasstrib: string | null
++          ibscbs_trib_reg_cst: string | null
+           id: string
+           iss_retido: boolean
+           max_tentativas: number
+@@ -463,6 +472,15 @@ export type Database = {
+           fatura_excedente_id?: string | null
+           ibs_aliquota?: number
+           ibs_valor_centavos?: number
++          ibscbs_cclasstrib?: string | null
++          ibscbs_cclasstrib_vale_nfse?: boolean | null
++          ibscbs_ccredpres?: string | null
++          ibscbs_cst?: string | null
++          ibscbs_dif_perc_cbs?: number | null
++          ibscbs_dif_perc_mun?: number | null
++          ibscbs_dif_perc_uf?: number | null
++          ibscbs_trib_reg_cclasstrib?: string | null
++          ibscbs_trib_reg_cst?: string | null
+           id?: string
+           iss_retido?: boolean
+           max_tentativas?: number
+@@ -500,6 +518,15 @@ export type Database = {
+           fatura_excedente_id?: string | null
+           ibs_aliquota?: number
+           ibs_valor_centavos?: number
++          ibscbs_cclasstrib?: string | null
++          ibscbs_cclasstrib_vale_nfse?: boolean | null
++          ibscbs_ccredpres?: string | null
++          ibscbs_cst?: string | null
++          ibscbs_dif_perc_cbs?: number | null
++          ibscbs_dif_perc_mun?: number | null
++          ibscbs_dif_perc_uf?: number | null
++          ibscbs_trib_reg_cclasstrib?: string | null
++          ibscbs_trib_reg_cst?: string | null
+           id?: string
+           iss_retido?: boolean
+           max_tentativas?: number
+@@ -520,6 +547,13 @@ export type Database = {
+           valor_servico_centavos?: number
+         }
+         Relationships: [
++          {
++            foreignKeyName: "fk_notas_cclasstrib_nfse"
++            columns: ["ibscbs_cclasstrib", "ibscbs_cclasstrib_vale_nfse"]
++            isOneToOne: false
++            referencedRelation: "cclasstrib_ibscbs"
++            referencedColumns: ["codigo", "aplica_nfse"]
++          },
+           {
+             foreignKeyName: "notas_fiscais_cliente_id_fkey"
+             columns: ["cliente_id"]
+@@ -541,6 +575,41 @@ export type Database = {
+             referencedRelation: "faturas_excedente"
+             referencedColumns: ["id"]
+           },
++          {
++            foreignKeyName: "notas_fiscais_ibscbs_ccredpres_fkey"
++            columns: ["ibscbs_ccredpres"]
++            isOneToOne: false
++            referencedRelation: "ccredpres_ibscbs"
++            referencedColumns: ["codigo"]
++          },
++          {
++            foreignKeyName: "notas_fiscais_ibscbs_cst_fkey"
++            columns: ["ibscbs_cst"]
++            isOneToOne: false
++            referencedRelation: "cst_ibscbs"
++            referencedColumns: ["codigo"]
++          },
++          {
++            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cclasstrib_fkey"
++            columns: ["ibscbs_trib_reg_cclasstrib"]
++            isOneToOne: false
++            referencedRelation: "cclasstrib_ibscbs"
++            referencedColumns: ["codigo"]
++          },
++          {
++            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cclasstrib_fkey"
++            columns: ["ibscbs_trib_reg_cclasstrib"]
++            isOneToOne: false
++            referencedRelation: "cclasstrib_nfse"
++            referencedColumns: ["codigo"]
++          },
++          {
++            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cst_fkey"
++            columns: ["ibscbs_trib_reg_cst"]
++            isOneToOne: false
++            referencedRelation: "cst_ibscbs"
++            referencedColumns: ["codigo"]
++          },
+         ]
+       }
+       notas_fiscais_tentativas: {
+@@ -702,6 +771,15 @@ export type Database = {
+           fatura_excedente_id: string | null
+           ibs_aliquota: number
+           ibs_valor_centavos: number
++          ibscbs_cclasstrib: string | null
++          ibscbs_cclasstrib_vale_nfse: boolean | null
++          ibscbs_ccredpres: string | null
++          ibscbs_cst: string | null
++          ibscbs_dif_perc_cbs: number | null
++          ibscbs_dif_perc_mun: number | null
++          ibscbs_dif_perc_uf: number | null
++          ibscbs_trib_reg_cclasstrib: string | null
++          ibscbs_trib_reg_cst: string | null
+           id: string
+           iss_retido: boolean
+           max_tentativas: number
+-- 
+2.43.0
+
