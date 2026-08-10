@@ -13,8 +13,13 @@ import {
   UploadCloud,
   XCircle,
 } from "lucide-react";
+// `import type` é apagado na compilação: o módulo de providers é server-only
+// (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
+import type { ProviderInfo } from "@/lib/fiscal/providers";
+import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
 import {
   salvarDadosFiscaisAction,
+  salvarProviderFiscalAction,
   uploadCertificadoAction,
   type ActionResult,
 } from "./actions";
@@ -137,17 +142,27 @@ interface DadosIniciais {
   emailContato: string;
   cnae: string;
   simplesPorFora: boolean;
+  providerFiscal: string;
 }
 
 // ---------------------------------------------------------------------------
 // Formulário principal
 // ---------------------------------------------------------------------------
 
-export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: DadosIniciais }) {
+export function FormularioConfiguracoes({
+  dadosIniciais,
+  providers,
+}: {
+  dadosIniciais: DadosIniciais;
+  providers: ProviderInfo[];
+}) {
   const [salvandoDados, startDados] = useTransition();
   const [salvandoCert, startCert] = useTransition();
+  const [salvandoProvider, startProvider] = useTransition();
   const [resultadoDados, setResultadoDados] = useState<ActionResult | null>(null);
   const [resultadoCert, setResultadoCert] = useState<ActionResult | null>(null);
+  const [resultadoProvider, setResultadoProvider] = useState<ActionResult | null>(null);
+  const [provider, setProvider] = useState(dadosIniciais.providerFiscal);
 
   const [regime, setRegime] = useState(dadosIniciais.regimeTributario);
   const [codigoServico, setCodigoServico] = useState("");
@@ -188,7 +203,13 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
     startCert(async () => setResultadoCert(await uploadCertificadoAction(formData)));
   }
 
+  function enviarProvider(formData: FormData) {
+    startProvider(async () => setResultadoProvider(await salvarProviderFiscalAction(formData)));
+  }
+
   const regimeSelecionado = REGIMES.find((r) => r.valor === regime);
+  const aceitaSimplesPorFora = regime === REGIME_COM_SIMPLES_POR_FORA;
+  const providerSelecionado = providers.find((p) => p.nome === provider);
 
   return (
     <div className="space-y-8">
@@ -280,18 +301,35 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
             </Ajuda>
           </label>
 
-          <label className="flex items-start gap-2 sm:col-span-2">
-            <input
-              type="checkbox"
-              name="simplesPorFora"
-              defaultChecked={dadosIniciais.simplesPorFora}
-              className="mt-1 h-4 w-4 rounded border-slate-300"
-            />
-            <span className="text-sm text-slate-600">
-              Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
-              crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por dentro&quot;.
-            </span>
-          </label>
+          {/*
+            A caixa some fora do Simples Nacional. O schema já recusa a combinação
+            (dadosFiscaisSchema.superRefine), mas deixá-la visível para MEI e lucro
+            presumido/real convidaria o usuário a um erro que só apareceria depois
+            de salvar. Sumindo, o campo nem vai no FormData e vira `false`.
+          */}
+          {aceitaSimplesPorFora ? (
+            <label className="flex items-start gap-2 sm:col-span-2">
+              <input
+                type="checkbox"
+                name="simplesPorFora"
+                defaultChecked={dadosIniciais.simplesPorFora}
+                className="mt-1 h-4 w-4 rounded border-slate-300"
+              />
+              <span className="text-sm text-slate-600">
+                Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
+                crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por
+                dentro&quot;.
+              </span>
+            </label>
+          ) : (
+            <p className="text-sm text-slate-500 sm:col-span-2">
+              A opção <strong>Simples Nacional &quot;por fora&quot;</strong> aparece apenas para
+              optantes pelo Simples Nacional.{" "}
+              {regime === "mei"
+                ? "O MEI tem tratamento próprio no IBS/CBS."
+                : "Neste regime o IBS/CBS já é apurado pelo regime regular."}
+            </p>
+          )}
         </div>
 
         {/* ---- Seletor visual de regime tributário ---- */}
@@ -472,6 +510,76 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
             Enviar certificado criptografado
           </button>
           <Feedback resultado={resultadoCert} />
+        </div>
+      </form>
+
+      {/* ================= Provider fiscal ================= */}
+      <form action={enviarProvider} className="rounded-xl border border-slate-200 bg-white p-6">
+        <h2 className="text-lg font-medium">Emissor de NFS-e</h2>
+        <Ajuda>
+          Quem conversa com a prefeitura quando uma nota é emitida. Só aparecem aqui os
+          emissores com credencial configurada neste ambiente.
+        </Ajuda>
+
+        <input type="hidden" name="providerFiscal" value={provider} />
+        <div className="mt-4 grid grid-cols-1 gap-3">
+          {providers.map((opcao) => {
+            const ativo = provider === opcao.nome;
+            return (
+              <button
+                key={opcao.nome}
+                type="button"
+                disabled={!opcao.disponivel}
+                onClick={() => setProvider(opcao.nome)}
+                aria-pressed={ativo}
+                className={`rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                  ativo
+                    ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{opcao.rotulo}</span>
+                  <span className="flex items-center gap-2">
+                    {opcao.ehSimulacao && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                        sem validade jurídica
+                      </span>
+                    )}
+                    {ativo && <BadgeCheck className="h-5 w-5 text-brand-600" aria-hidden />}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{opcao.descricao}</p>
+                {!opcao.disponivel && opcao.motivoIndisponivel && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    <strong>Indisponível:</strong> {opcao.motivoIndisponivel}
+                  </p>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {providerSelecionado?.ehSimulacao && (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900"
+          >
+            <strong>Atenção:</strong> as notas emitidas com este emissor NÃO têm validade
+            jurídica. Use apenas para testar o fluxo — nenhuma obrigação fiscal é cumprida.
+          </div>
+        )}
+
+        <div className="mt-5 flex items-center gap-3">
+          <button
+            type="submit"
+            disabled={salvandoProvider}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+          >
+            {salvandoProvider && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+            Salvar emissor
+          </button>
+          <Feedback resultado={resultadoProvider} />
         </div>
       </form>
     </div>

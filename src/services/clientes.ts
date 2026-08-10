@@ -38,18 +38,63 @@ export interface ClienteResumo {
   ativo: boolean;
 }
 
+/**
+ * Paginação (item A8).
+ *
+ * A versão anterior trazia TODOS os clientes do tenant numa consulta só. Isso
+ * funciona no beta, com dezenas de linhas, e degrada em silêncio depois: a
+ * página fica mais lenta a cada cadastro, sem nenhum momento em que alguém seja
+ * avisado. E há um desfecho pior que lentidão — se houver limite de linhas
+ * configurado no PostgREST (`db-max-rows`, que o Supabase expõe como ajuste), a
+ * lista passa a ser truncada SEM erro, e o usuário simplesmente deixa de ver
+ * parte dos próprios clientes.
+ *
+ * O teto é aplicado aqui, e não confiado a quem chama, para que não exista
+ * caminho que devolva "tudo".
+ */
+export const CLIENTES_POR_PAGINA_PADRAO = 50;
+export const CLIENTES_POR_PAGINA_MAX = 200;
+
+export interface PaginaDeClientes {
+  itens: ClienteResumo[];
+  /** Total no banco — não o tamanho de `itens`. */
+  total: number;
+  pagina: number;
+  porPagina: number;
+  temMais: boolean;
+}
+
 export async function listarClientes(
   db: SupabaseClient<Database>,
-  params: { empresaId: string },
-): Promise<ClienteResumo[]> {
-  const { data, error } = await db
+  params: { empresaId: string; pagina?: number; porPagina?: number; busca?: string },
+): Promise<PaginaDeClientes> {
+  const porPagina = Math.min(
+    Math.max(1, Math.trunc(params.porPagina ?? CLIENTES_POR_PAGINA_PADRAO)),
+    CLIENTES_POR_PAGINA_MAX,
+  );
+  const pagina = Math.max(1, Math.trunc(params.pagina ?? 1));
+  const de = (pagina - 1) * porPagina;
+
+  let consulta = db
     .from("clientes")
-    .select("id, nome, cpf_cnpj, email, telefone, ativo")
-    .eq("empresa_id", params.empresaId)
-    .order("nome");
+    // `count: "exact"` traz o total do banco junto com a página. Sem ele a UI
+    // não teria como dizer "50 de 1.240" nem saber se há próxima página.
+    .select("id, nome, cpf_cnpj, email, telefone, ativo", { count: "exact" })
+    .eq("empresa_id", params.empresaId);
+
+  const busca = params.busca?.trim();
+  if (busca) {
+    // Escapa os curingas do LIKE: um "%" digitado pelo usuário deve ser buscado
+    // como caractere, não virar "casa com qualquer coisa".
+    const alvo = busca.replace(/[%_\\]/g, (c) => `\\${c}`);
+    consulta = consulta.ilike("nome", `%${alvo}%`);
+  }
+
+  const { data, error, count } = await consulta.order("nome").range(de, de + porPagina - 1);
 
   if (error) throw new Error(`Falha ao listar clientes: ${error.message}`);
-  return (data ?? []).map((c) => ({
+
+  const itens = (data ?? []).map((c) => ({
     id: c.id,
     nome: c.nome,
     cpfCnpj: c.cpf_cnpj,
@@ -57,6 +102,9 @@ export async function listarClientes(
     telefone: c.telefone,
     ativo: c.ativo,
   }));
+
+  const total = count ?? itens.length;
+  return { itens, total, pagina, porPagina, temMais: de + itens.length < total };
 }
 
 export async function criarCliente(

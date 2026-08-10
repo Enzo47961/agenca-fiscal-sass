@@ -44,11 +44,45 @@ export async function statusDasNotas(
   inicioMes.setUTCDate(1);
   inicioMes.setUTCHours(0, 0, 0, 0);
 
-  const [{ data: todas }, { data: recentes }] = await Promise.all([
+  // ---- Contagem por status: no BANCO, não em memória (item A8) -------------
+  //
+  // Antes, isto baixava TODA nota do tenant — `select status, valor, emitida_em`
+  // sem limite — e contava num laço aqui. Dois problemas, e o segundo é o grave:
+  //
+  // 1. O volume trafegado cresce para sempre. Um tenant com 50 mil notas
+  //    transferia 50 mil linhas a cada carregamento do painel.
+  // 2. Se houver limite de linhas no PostgREST (`db-max-rows`, ajuste que o
+  //    Supabase expõe), a resposta vem truncada SEM erro — e os totais do painel
+  //    passam a estar errados sem que nada indique isso. Número errado com cara
+  //    de certo é pior que painel lento.
+  //
+  // `head: true` + `count: "exact"` faz o Postgres contar e não devolver linha
+  // nenhuma. O índice `idx_notas_empresa_status` cobre exatamente este par.
+  const STATUS: readonly NotaStatus[] = ["pendente", "reprocessando", "emitida", "falhou"];
+
+  const [contagens, { data: faturadas }, { data: recentes }] = await Promise.all([
+    Promise.all(
+      STATUS.map((status) =>
+        db
+          .from("notas_fiscais")
+          .select("id", { count: "exact", head: true })
+          .eq("empresa_id", params.empresaId)
+          .eq("status", status),
+      ),
+    ),
+    // Faturamento do mês: filtrado no banco por status e data. Ainda traz
+    // linhas, mas limitadas ao MÊS corrente, não a todo o histórico.
+    //
+    // PENDENTE: o certo é um RPC com SUM() devolvendo um número só. Não foi
+    // feito agora porque exigiria migration + `database.ts` regenerado, e o
+    // arquivo está fora de sincronia neste momento. Fica registrado para não
+    // passar por resolvido.
     db
       .from("notas_fiscais")
-      .select("status, valor_servico_centavos, emitida_em")
-      .eq("empresa_id", params.empresaId),
+      .select("valor_servico_centavos")
+      .eq("empresa_id", params.empresaId)
+      .eq("status", "emitida")
+      .gte("emitida_em", inicioMes.toISOString()),
     db
       .from("notas_fiscais")
       .select(
@@ -65,13 +99,13 @@ export async function statusDasNotas(
     emitida: 0,
     falhou: 0,
   };
-  let faturamentoMesCentavos = 0;
+  STATUS.forEach((status, i) => {
+    contagemPorStatus[status] = contagens[i]?.count ?? 0;
+  });
 
-  for (const n of todas ?? []) {
-    contagemPorStatus[n.status] += 1;
-    if (n.status === "emitida" && n.emitida_em && new Date(n.emitida_em) >= inicioMes) {
-      faturamentoMesCentavos += n.valor_servico_centavos;
-    }
+  let faturamentoMesCentavos = 0;
+  for (const n of faturadas ?? []) {
+    faturamentoMesCentavos += n.valor_servico_centavos;
   }
 
   const resumo: ResumoNotas = {

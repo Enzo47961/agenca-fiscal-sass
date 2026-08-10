@@ -409,6 +409,10 @@ export type Database = {
       }
       notas_fiscais: {
         Row: {
+          ajuste_base_centavos: number
+          ajuste_base_tipo:
+            | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
+            | null
           aliquota_iss: number
           cbs_aliquota: number
           cbs_valor_centavos: number
@@ -416,8 +420,10 @@ export type Database = {
           codigo_nbs: string | null
           codigo_servico: string
           codigo_verificacao: string | null
+          cofins_centavos: number
           competencia: string
           created_at: string
+          desconto_incondicionado_centavos: number
           descricao_servico: string
           emitida_em: string | null
           empresa_id: string
@@ -426,6 +432,7 @@ export type Database = {
           fatura_excedente_id: string | null
           ibs_aliquota: number
           ibs_valor_centavos: number
+          ibscbs_base_centavos: number | null
           ibscbs_cclasstrib: string | null
           ibscbs_cclasstrib_vale_nfse: boolean | null
           ibscbs_ccredpres: string | null
@@ -437,8 +444,10 @@ export type Database = {
           ibscbs_trib_reg_cst: string | null
           id: string
           iss_retido: boolean
+          issqn_centavos: number
           max_tentativas: number
           numero_nfse: string | null
+          pis_centavos: number
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
@@ -455,6 +464,10 @@ export type Database = {
           valor_servico_centavos: number
         }
         Insert: {
+          ajuste_base_centavos?: number
+          ajuste_base_tipo?:
+            | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
+            | null
           aliquota_iss?: number
           cbs_aliquota?: number
           cbs_valor_centavos?: number
@@ -462,8 +475,10 @@ export type Database = {
           codigo_nbs?: string | null
           codigo_servico: string
           codigo_verificacao?: string | null
+          cofins_centavos?: number
           competencia?: string
           created_at?: string
+          desconto_incondicionado_centavos?: number
           descricao_servico: string
           emitida_em?: string | null
           empresa_id: string
@@ -472,6 +487,7 @@ export type Database = {
           fatura_excedente_id?: string | null
           ibs_aliquota?: number
           ibs_valor_centavos?: number
+          ibscbs_base_centavos?: number | null
           ibscbs_cclasstrib?: string | null
           ibscbs_cclasstrib_vale_nfse?: boolean | null
           ibscbs_ccredpres?: string | null
@@ -483,8 +499,10 @@ export type Database = {
           ibscbs_trib_reg_cst?: string | null
           id?: string
           iss_retido?: boolean
+          issqn_centavos?: number
           max_tentativas?: number
           numero_nfse?: string | null
+          pis_centavos?: number
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
@@ -501,6 +519,10 @@ export type Database = {
           valor_servico_centavos: number
         }
         Update: {
+          ajuste_base_centavos?: number
+          ajuste_base_tipo?:
+            | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
+            | null
           aliquota_iss?: number
           cbs_aliquota?: number
           cbs_valor_centavos?: number
@@ -508,8 +530,10 @@ export type Database = {
           codigo_nbs?: string | null
           codigo_servico?: string
           codigo_verificacao?: string | null
+          cofins_centavos?: number
           competencia?: string
           created_at?: string
+          desconto_incondicionado_centavos?: number
           descricao_servico?: string
           emitida_em?: string | null
           empresa_id?: string
@@ -518,6 +542,7 @@ export type Database = {
           fatura_excedente_id?: string | null
           ibs_aliquota?: number
           ibs_valor_centavos?: number
+          ibscbs_base_centavos?: number | null
           ibscbs_cclasstrib?: string | null
           ibscbs_cclasstrib_vale_nfse?: boolean | null
           ibscbs_ccredpres?: string | null
@@ -529,8 +554,10 @@ export type Database = {
           ibscbs_trib_reg_cst?: string | null
           id?: string
           iss_retido?: boolean
+          issqn_centavos?: number
           max_tentativas?: number
           numero_nfse?: string | null
+          pis_centavos?: number
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
@@ -754,6 +781,10 @@ export type Database = {
           p_novo_status: Database["public"]["Enums"]["nota_status"]
         }
         Returns: {
+          ajuste_base_centavos: number
+          ajuste_base_tipo:
+            | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
+            | null
           aliquota_iss: number
           cbs_aliquota: number
           cbs_valor_centavos: number
@@ -761,8 +792,10 @@ export type Database = {
           codigo_nbs: string | null
           codigo_servico: string
           codigo_verificacao: string | null
+          cofins_centavos: number
           competencia: string
           created_at: string
+          desconto_incondicionado_centavos: number
           descricao_servico: string
           emitida_em: string | null
           empresa_id: string
@@ -771,6 +804,7 @@ export type Database = {
           fatura_excedente_id: string | null
           ibs_aliquota: number
           ibs_valor_centavos: number
+          ibscbs_base_centavos: number | null
           ibscbs_cclasstrib: string | null
           ibscbs_cclasstrib_vale_nfse: boolean | null
           ibscbs_ccredpres: string | null
@@ -782,8 +816,10 @@ export type Database = {
           ibscbs_trib_reg_cst: string | null
           id: string
           iss_retido: boolean
+          issqn_centavos: number
           max_tentativas: number
           numero_nfse: string | null
+          pis_centavos: number
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
@@ -813,6 +849,7 @@ export type Database = {
       nota_status: "pendente" | "reprocessando" | "emitida" | "falhou"
       plano_tipo: "starter" | "pro" | "escala"
       tentativa_resultado: "sucesso" | "erro_transiente" | "erro_permanente"
+      tipo_ajuste_base_ibscbs: "ibscbs" | "loc_imoveis"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -948,6 +985,7 @@ export const Constants = {
       nota_status: ["pendente", "reprocessando", "emitida", "falhou"],
       plano_tipo: ["starter", "pro", "escala"],
       tentativa_resultado: ["sucesso", "erro_transiente", "erro_permanente"],
+      tipo_ajuste_base_ibscbs: ["ibscbs", "loc_imoveis"],
     },
   },
 } as const

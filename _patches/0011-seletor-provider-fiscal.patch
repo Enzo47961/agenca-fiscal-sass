@@ -1,0 +1,499 @@
+From f1b5c5c2ab188bfbb1c419d4171c99e83f88d1e8 Mon Sep 17 00:00:00 2001
+From: "Enzo (via Claude)" <enzo47961@gmail.com>
+Date: Thu, 6 Aug 2026 17:41:29 +0000
+Subject: [PATCH] feat(config): seletor de provider fiscal nas configuracoes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Destrava um Critico inteiro por pouco codigo. O FocusNfeProvider estava
+implementado e testado desde o commit 43b48d8, mas `empresas.provider_fiscal`
+nasce com default 'mock' e NAO havia campo em lugar nenhum para trocar — nem
+no schema de dados fiscais, nem no formulario. Nenhum tenant conseguia chegar
+ao provider real, por mais pronto que ele estivesse.
+
+lib/fiscal/providers/index.ts — providersDisponiveis()
+Devolve os providers com metadados e, principalmente, com a DISPONIBILIDADE
+avaliada a partir do ambiente. Esse campo evita o pior desfecho possivel
+nesta tela: deixar escolher um provider sem credencial. Se passasse, a escolha
+seria salva sem erro e so quebraria depois, dentro do motor, com a nota ja
+criada e o usuario fora da tela. Focus NFe so aparece como disponivel quando
+FOCUSNFE_TOKEN existe; quando nao existe, o motivo e mostrado.
+
+`ehSimulacao` marca o que nao produz documento com validade juridica — o mock
+sempre, e a Focus enquanto FOCUSNFE_AMBIENTE for homologacao. A UI destaca
+isso com badge e alerta, porque "minha nota foi emitida" com numero ficticio
+e exatamente o mal-entendido que custa caro.
+
+services/empresas.ts — atualizarProviderFiscal()
+Recebe `disponiveis` por parametro (regra 20): quem sabe o que tem credencial
+e o ambiente, e o service continua puro. A validacao e a parte que importa;
+o UPDATE e trivial.
+
+app/dashboard/configuracoes — action propria (nao entrou em
+dadosFiscaisSchema, que e outra preocupacao e e reusado pelo onboarding), UI
+com os cards no mesmo padrao do seletor de regime tributario, opcao
+indisponivel desabilitada com o motivo visivel, e alerta quando o emissor
+selecionado nao tem validade juridica.
+
+Detalhe de bundle: `import type { ProviderInfo }` no componente cliente, nao
+`import { type ... }` inline — o modulo de providers chama serverEnv() e nao
+pode entrar no bundle do cliente. Build confere.
+
+5 testes novos (177 no total, eram 172): grava quando disponivel; recusa
+provider sem credencial e NAO grava nada (o teste afirma o update que nao
+aconteceu); recusa provider inexistente; a mensagem lista as opcoes reais;
+erro do banco e propagado.
+
+DoD: typecheck OK, lint OK, test OK (177), build OK.
+---
+ src/app/dashboard/configuracoes/actions.ts    | 22 +++++
+ .../dashboard/configuracoes/formulario.tsx    | 91 ++++++++++++++++++-
+ src/app/dashboard/configuracoes/page.tsx      |  5 +-
+ src/lib/fiscal/ibscbs.ts                      |  8 +-
+ src/lib/fiscal/providers/index.ts             | 61 ++++++++++++-
+ src/services/empresas.test.ts                 | 81 +++++++++++++++++
+ src/services/empresas.ts                      | 28 ++++++
+ 7 files changed, 289 insertions(+), 7 deletions(-)
+ create mode 100644 src/services/empresas.test.ts
+
+diff --git a/src/app/dashboard/configuracoes/actions.ts b/src/app/dashboard/configuracoes/actions.ts
+index da86550..e5f45bf 100644
+--- a/src/app/dashboard/configuracoes/actions.ts
++++ b/src/app/dashboard/configuracoes/actions.ts
+@@ -5,9 +5,11 @@ import { createSessionClient, empresaDaSessao } from "@/lib/supabase/server";
+ import { serverEnv } from "@/lib/env";
+ import {
+   atualizarDadosFiscais,
++  atualizarProviderFiscal,
+   dadosFiscaisSchema,
+   salvarCertificadoA1,
+ } from "@/services/empresas";
++import { nomesDeProvidersDisponiveis } from "@/lib/fiscal/providers";
+ 
+ export interface ActionResult {
+   ok: boolean;
+@@ -49,6 +51,26 @@ export async function salvarDadosFiscaisAction(formData: FormData): Promise<Acti
+   }
+ }
+ 
++export async function salvarProviderFiscalAction(formData: FormData): Promise<ActionResult> {
++  const db = createSessionClient();
++  const sessao = await empresaDaSessao(db);
++  if (!sessao) return { ok: false, erro: "Sessão expirada. Faça login novamente." };
++
++  const provider = String(formData.get("providerFiscal") ?? "");
++
++  try {
++    await atualizarProviderFiscal(db, {
++      empresaId: sessao.empresaId,
++      provider,
++      disponiveis: nomesDeProvidersDisponiveis(),
++    });
++    revalidatePath("/dashboard/configuracoes");
++    return { ok: true };
++  } catch (e) {
++    return { ok: false, erro: e instanceof Error ? e.message : "Erro ao salvar." };
++  }
++}
++
+ export async function uploadCertificadoAction(formData: FormData): Promise<ActionResult> {
+   const db = createSessionClient();
+   const sessao = await empresaDaSessao(db);
+diff --git a/src/app/dashboard/configuracoes/formulario.tsx b/src/app/dashboard/configuracoes/formulario.tsx
+index b141f2a..584265e 100644
+--- a/src/app/dashboard/configuracoes/formulario.tsx
++++ b/src/app/dashboard/configuracoes/formulario.tsx
+@@ -13,8 +13,12 @@ import {
+   UploadCloud,
+   XCircle,
+ } from "lucide-react";
++// `import type` é apagado na compilação: o módulo de providers é server-only
++// (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
++import type { ProviderInfo } from "@/lib/fiscal/providers";
+ import {
+   salvarDadosFiscaisAction,
++  salvarProviderFiscalAction,
+   uploadCertificadoAction,
+   type ActionResult,
+ } from "./actions";
+@@ -137,17 +141,27 @@ interface DadosIniciais {
+   emailContato: string;
+   cnae: string;
+   simplesPorFora: boolean;
++  providerFiscal: string;
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Formulário principal
+ // ---------------------------------------------------------------------------
+ 
+-export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: DadosIniciais }) {
++export function FormularioConfiguracoes({
++  dadosIniciais,
++  providers,
++}: {
++  dadosIniciais: DadosIniciais;
++  providers: ProviderInfo[];
++}) {
+   const [salvandoDados, startDados] = useTransition();
+   const [salvandoCert, startCert] = useTransition();
++  const [salvandoProvider, startProvider] = useTransition();
+   const [resultadoDados, setResultadoDados] = useState<ActionResult | null>(null);
+   const [resultadoCert, setResultadoCert] = useState<ActionResult | null>(null);
++  const [resultadoProvider, setResultadoProvider] = useState<ActionResult | null>(null);
++  const [provider, setProvider] = useState(dadosIniciais.providerFiscal);
+ 
+   const [regime, setRegime] = useState(dadosIniciais.regimeTributario);
+   const [codigoServico, setCodigoServico] = useState("");
+@@ -188,7 +202,12 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
+     startCert(async () => setResultadoCert(await uploadCertificadoAction(formData)));
+   }
+ 
++  function enviarProvider(formData: FormData) {
++    startProvider(async () => setResultadoProvider(await salvarProviderFiscalAction(formData)));
++  }
++
+   const regimeSelecionado = REGIMES.find((r) => r.valor === regime);
++  const providerSelecionado = providers.find((p) => p.nome === provider);
+ 
+   return (
+     <div className="space-y-8">
+@@ -474,6 +493,76 @@ export function FormularioConfiguracoes({ dadosIniciais }: { dadosIniciais: Dado
+           <Feedback resultado={resultadoCert} />
+         </div>
+       </form>
++
++      {/* ================= Provider fiscal ================= */}
++      <form action={enviarProvider} className="rounded-xl border border-slate-200 bg-white p-6">
++        <h2 className="text-lg font-medium">Emissor de NFS-e</h2>
++        <Ajuda>
++          Quem conversa com a prefeitura quando uma nota é emitida. Só aparecem aqui os
++          emissores com credencial configurada neste ambiente.
++        </Ajuda>
++
++        <input type="hidden" name="providerFiscal" value={provider} />
++        <div className="mt-4 grid grid-cols-1 gap-3">
++          {providers.map((opcao) => {
++            const ativo = provider === opcao.nome;
++            return (
++              <button
++                key={opcao.nome}
++                type="button"
++                disabled={!opcao.disponivel}
++                onClick={() => setProvider(opcao.nome)}
++                aria-pressed={ativo}
++                className={`rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
++                  ativo
++                    ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
++                    : "border-slate-200 bg-white hover:border-slate-300"
++                }`}
++              >
++                <div className="flex items-center justify-between gap-3">
++                  <span className="font-medium">{opcao.rotulo}</span>
++                  <span className="flex items-center gap-2">
++                    {opcao.ehSimulacao && (
++                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
++                        sem validade jurídica
++                      </span>
++                    )}
++                    {ativo && <BadgeCheck className="h-5 w-5 text-brand-600" aria-hidden />}
++                  </span>
++                </div>
++                <p className="mt-1 text-xs text-slate-500">{opcao.descricao}</p>
++                {!opcao.disponivel && opcao.motivoIndisponivel && (
++                  <p className="mt-2 text-xs text-slate-500">
++                    <strong>Indisponível:</strong> {opcao.motivoIndisponivel}
++                  </p>
++                )}
++              </button>
++            );
++          })}
++        </div>
++
++        {providerSelecionado?.ehSimulacao && (
++          <div
++            role="alert"
++            className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900"
++          >
++            <strong>Atenção:</strong> as notas emitidas com este emissor NÃO têm validade
++            jurídica. Use apenas para testar o fluxo — nenhuma obrigação fiscal é cumprida.
++          </div>
++        )}
++
++        <div className="mt-5 flex items-center gap-3">
++          <button
++            type="submit"
++            disabled={salvandoProvider}
++            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
++          >
++            {salvandoProvider && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
++            Salvar emissor
++          </button>
++          <Feedback resultado={resultadoProvider} />
++        </div>
++      </form>
+     </div>
+   );
+ }
+diff --git a/src/app/dashboard/configuracoes/page.tsx b/src/app/dashboard/configuracoes/page.tsx
+index 6ec3b93..cb49029 100644
+--- a/src/app/dashboard/configuracoes/page.tsx
++++ b/src/app/dashboard/configuracoes/page.tsx
+@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
+ import { ArrowLeft, Building2, ShieldCheck } from "lucide-react";
+ import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
+ import { FormularioConfiguracoes } from "./formulario";
++import { providersDisponiveis } from "@/lib/fiscal/providers";
+ 
+ export const dynamic = "force-dynamic";
+ 
+@@ -16,7 +17,7 @@ export default async function ConfiguracoesPage() {
+   const { data: empresa } = await db
+     .from("empresas")
+     .select(
+-      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, simples_por_fora",
++      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, simples_por_fora, provider_fiscal",
+     )
+     .eq("id", sessao.empresaId)
+     .single();
+@@ -54,6 +55,7 @@ export default async function ConfiguracoesPage() {
+       </div>
+ 
+       <FormularioConfiguracoes
++        providers={providersDisponiveis()}
+         dadosIniciais={{
+           razaoSocial: empresa?.razao_social ?? "",
+           nomeFantasia: empresa?.nome_fantasia ?? "",
+@@ -64,6 +66,7 @@ export default async function ConfiguracoesPage() {
+           emailContato: empresa?.email_contato ?? "",
+           cnae: empresa?.cnae ?? "",
+           simplesPorFora: empresa?.simples_por_fora ?? false,
++          providerFiscal: empresa?.provider_fiscal ?? "mock",
+         }}
+       />
+     </main>
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+index 8caf05b..0e295a1 100644
+--- a/src/lib/fiscal/ibscbs.ts
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -392,10 +392,10 @@ export function declaracaoDeColunas(nota: {
+ // ---------------------------------------------------------------------------
+ 
+ export const PENDENCIAS_C5 = [
+-  "O caminho de dados do grupo IBSCBS está COMPLETO: schema aceita, " +
+-    "validação roda na criação e na emissão, colunas persistem com FK e " +
+-    "CHECKs no banco, e o motor reconstrói e envia. Falta a UI: nenhum " +
+-    "formulário coleta CST/cClassTrib ainda — só a API.",
++  "O caminho de dados do grupo IBSCBS está COMPLETO da API ao provider. " +
++    "Falta a UI: nenhum formulário coleta CST/cClassTrib ainda. Quando for " +
++    "feita, usar a view `cclasstrib_nfse` para oferecer só os 71 códigos " +
++    "válidos, em vez dos 164.",
+   "As colunas de redução, os indicadores e o tipo de alíquota JÁ FORAM " +
+     "PREENCHIDOS (migration de complemento). Falta usar `perc_reducao_ibs`/" +
+     "`perc_reducao_cbs` no cálculo: hoje a redução ainda vem do enum " +
+diff --git a/src/lib/fiscal/providers/index.ts b/src/lib/fiscal/providers/index.ts
+index 3298a70..c5bd9b6 100644
+--- a/src/lib/fiscal/providers/index.ts
++++ b/src/lib/fiscal/providers/index.ts
+@@ -1,7 +1,7 @@
+ import { type FiscalProvider } from "../provider";
+ import { MockFiscalProvider } from "./mock";
+ import { FocusNfeProvider } from "./focusnfe";
+-import { focusNfeEnv } from "@/lib/env";
++import { focusNfeEnv, serverEnv } from "@/lib/env";
+ 
+ /**
+  * Registry de providers fiscais (regra 21 do CLAUDE.md).
+@@ -34,3 +34,62 @@ export function resolverProvider(nome: string, deps: DependenciasProvider = {}):
+   }
+   return factory(deps);
+ }
++
++/**
++ * Metadados de um provider para a tela de configurações.
++ *
++ * `disponivel` é a informação que evita o pior desfecho possível aqui: deixar
++ * o usuário escolher um provider que não tem credencial configurada. Se isso
++ * passasse, a escolha seria salva sem erro e só quebraria mais tarde, dentro
++ * do motor, com a nota já criada e o usuário fora da tela.
++ */
++export interface ProviderInfo {
++  readonly nome: string;
++  readonly rotulo: string;
++  readonly descricao: string;
++  /** true = não emite documento com validade jurídica. */
++  readonly ehSimulacao: boolean;
++  readonly disponivel: boolean;
++  /** Por que não está disponível — mostrado ao usuário. */
++  readonly motivoIndisponivel: string | null;
++}
++
++/**
++ * Providers que o tenant pode escolher, com a disponibilidade avaliada AGORA
++ * a partir do ambiente. Server-only: chama serverEnv().
++ */
++export function providersDisponiveis(): ProviderInfo[] {
++  const env = serverEnv();
++
++  return [
++    {
++      nome: "mock",
++      rotulo: "Simulação (mock)",
++      descricao:
++        "Simula a prefeitura para testar o motor de retry. As notas recebem número fictício " +
++        "e NÃO têm validade jurídica.",
++      ehSimulacao: true,
++      disponivel: true,
++      motivoIndisponivel: null,
++    },
++    {
++      nome: "focusnfe",
++      rotulo: `Focus NFe (${env.FOCUSNFE_AMBIENTE})`,
++      descricao:
++        "Emissão real via Focus NFe. Em homologação as notas são válidas apenas para teste; " +
++        "em produção têm validade jurídica.",
++      ehSimulacao: env.FOCUSNFE_AMBIENTE === "homologacao",
++      disponivel: Boolean(env.FOCUSNFE_TOKEN),
++      motivoIndisponivel: env.FOCUSNFE_TOKEN
++        ? null
++        : "FOCUSNFE_TOKEN não está configurado nas variáveis de ambiente.",
++    },
++  ];
++}
++
++/** Nomes que podem ser gravados em `empresas.provider_fiscal` hoje. */
++export function nomesDeProvidersDisponiveis(): string[] {
++  return providersDisponiveis()
++    .filter((p) => p.disponivel)
++    .map((p) => p.nome);
++}
+diff --git a/src/services/empresas.test.ts b/src/services/empresas.test.ts
+new file mode 100644
+index 0000000..69b9811
+--- /dev/null
++++ b/src/services/empresas.test.ts
+@@ -0,0 +1,81 @@
++import { describe, it, expect } from "vitest";
++import { atualizarProviderFiscal } from "@/services/empresas";
++import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
++
++/**
++ * O ponto destes testes é a validação, não o UPDATE. Sem ela, o tenant salvaria
++ * "focusnfe" sem token configurado, a escolha seria aceita sem erro, e a falha
++ * só apareceria dentro do motor Inngest — com a nota já criada e o usuário
++ * fora da tela.
++ */
++function bancoFalso() {
++  const updates: unknown[] = [];
++  const db = fakeSupabase((ctx): FakeResult => {
++    if (ctx.op === "update") updates.push(ctx.payload);
++    return { data: null, error: null };
++  });
++  return { db, updates };
++}
++
++const EMPRESA = "11111111-1111-1111-1111-111111111111";
++
++describe("atualizarProviderFiscal", () => {
++  it("grava o provider quando ele está disponível", async () => {
++    const { db, updates } = bancoFalso();
++    await atualizarProviderFiscal(db, {
++      empresaId: EMPRESA,
++      provider: "focusnfe",
++      disponiveis: ["mock", "focusnfe"],
++    });
++
++    expect(updates).toEqual([{ provider_fiscal: "focusnfe" }]);
++  });
++
++  it("recusa provider sem credencial configurada, e não grava nada", async () => {
++    const { db, updates } = bancoFalso();
++
++    await expect(
++      atualizarProviderFiscal(db, {
++        empresaId: EMPRESA,
++        provider: "focusnfe",
++        disponiveis: ["mock"], // token ausente → focusnfe fora da lista
++      }),
++    ).rejects.toThrow(/não está disponível/);
++
++    expect(updates).toHaveLength(0);
++  });
++
++  it("recusa provider inexistente", async () => {
++    const { db, updates } = bancoFalso();
++    await expect(
++      atualizarProviderFiscal(db, {
++        empresaId: EMPRESA,
++        provider: "nuvemfiscal",
++        disponiveis: ["mock", "focusnfe"],
++      }),
++    ).rejects.toThrow(/não está disponível/);
++    expect(updates).toHaveLength(0);
++  });
++
++  it("a mensagem de erro diz quais opções existem", async () => {
++    const { db } = bancoFalso();
++    await expect(
++      atualizarProviderFiscal(db, {
++        empresaId: EMPRESA,
++        provider: "focusnfe",
++        disponiveis: ["mock"],
++      }),
++    ).rejects.toThrow(/mock/);
++  });
++
++  it("propaga erro do banco", async () => {
++    const db = fakeSupabase((): FakeResult => ({ data: null, error: { message: "RLS negou" } }));
++    await expect(
++      atualizarProviderFiscal(db, {
++        empresaId: EMPRESA,
++        provider: "mock",
++        disponiveis: ["mock"],
++      }),
++    ).rejects.toThrow(/RLS negou/);
++  });
++});
+diff --git a/src/services/empresas.ts b/src/services/empresas.ts
+index cdebe05..18041c3 100644
+--- a/src/services/empresas.ts
++++ b/src/services/empresas.ts
+@@ -87,6 +87,34 @@ export async function atualizarDadosFiscais(
+   if (error) throw new Error(`Falha ao atualizar dados fiscais: ${error.message}`);
+ }
+ 
++/**
++ * Troca o provider fiscal da empresa.
++ *
++ * `disponiveis` vem por parâmetro (regra 20) porque quem sabe quais providers
++ * têm credencial configurada é o ambiente, e este service é lógica pura. A
++ * validação é a parte que importa: sem ela, o tenant poderia salvar
++ * "focusnfe" sem token e só descobrir o problema quando a primeira nota
++ * falhasse dentro do motor, minutos depois.
++ */
++export async function atualizarProviderFiscal(
++  db: SupabaseClient<Database>,
++  params: { empresaId: string; provider: string; disponiveis: readonly string[] },
++): Promise<void> {
++  if (!params.disponiveis.includes(params.provider)) {
++    throw new Error(
++      `Provider fiscal "${params.provider}" não está disponível. ` +
++        `Opções configuradas: ${params.disponiveis.join(", ") || "nenhuma"}.`,
++    );
++  }
++
++  const { error } = await db
++    .from("empresas")
++    .update({ provider_fiscal: params.provider })
++    .eq("id", params.empresaId); // RLS restringe a admins/owners da empresa
++
++  if (error) throw new Error(`Falha ao trocar o provider fiscal: ${error.message}`);
++}
++
+ // ---------------------------------------------------------------------------
+ // Certificado A1
+ // ---------------------------------------------------------------------------
+-- 
+2.43.0
+

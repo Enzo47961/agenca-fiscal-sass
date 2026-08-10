@@ -334,6 +334,56 @@ export function validarDeclaracao(
   return { valido: erros.length === 0, erros };
 }
 
+/**
+ * Reconstrói a declaração a partir das colunas de `notas_fiscais`.
+ *
+ * É a ponte entre o que foi PERSISTIDO na criação e o que é DECLARADO na
+ * emissão. Se ela errar, a declaração fica gravada no banco e some no caminho
+ * para a prefeitura — falha silenciosa, sem erro nenhum. Por isso vive aqui,
+ * no domínio puro, e não dentro da função Inngest: assim é testável sem mock.
+ *
+ * `null` quando o CST não foi declarado — o caso normal hoje. O par
+ * CST/cClassTrib é garantido por CHECK no banco, então se um existe o outro
+ * também existe; a checagem dupla abaixo é defensiva.
+ */
+export function declaracaoDeColunas(nota: {
+  ibscbs_cst: string | null;
+  ibscbs_cclasstrib: string | null;
+  ibscbs_ccredpres: string | null;
+  ibscbs_trib_reg_cst: string | null;
+  ibscbs_trib_reg_cclasstrib: string | null;
+  ibscbs_dif_perc_uf: number | null;
+  ibscbs_dif_perc_mun: number | null;
+  ibscbs_dif_perc_cbs: number | null;
+}): DeclaracaoTributariaIBSCBS | null {
+  if (!nota.ibscbs_cst || !nota.ibscbs_cclasstrib) return null;
+
+  const temDiferimento =
+    nota.ibscbs_dif_perc_uf !== null ||
+    nota.ibscbs_dif_perc_mun !== null ||
+    nota.ibscbs_dif_perc_cbs !== null;
+
+  return {
+    cst: nota.ibscbs_cst,
+    cClassTrib: nota.ibscbs_cclasstrib,
+    cCredPres: nota.ibscbs_ccredpres,
+    tribRegular:
+      nota.ibscbs_trib_reg_cst && nota.ibscbs_trib_reg_cclasstrib
+        ? {
+            cstRegular: nota.ibscbs_trib_reg_cst,
+            cClassTribRegular: nota.ibscbs_trib_reg_cclasstrib,
+          }
+        : null,
+    diferimento: temDiferimento
+      ? {
+          percentualUf: nota.ibscbs_dif_perc_uf,
+          percentualMun: nota.ibscbs_dif_perc_mun,
+          percentualCbs: nota.ibscbs_dif_perc_cbs,
+        }
+      : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // PENDÊNCIAS DO C5 — o que a pesquisa deixou EXPLICITAMENTE em aberto.
 //
@@ -342,10 +392,10 @@ export function validarDeclaracao(
 // ---------------------------------------------------------------------------
 
 export const PENDENCIAS_C5 = [
-  "A validação contra a tabela oficial está ATIVA no caminho de emissão " +
-    "(services/dominio-fiscal.ts, injetado pelo motor no resolverProvider). " +
-    "Falta ativá-la também na CRIAÇÃO da nota: hoje a declaração só é " +
-    "conferida na hora de emitir, não quando o usuário a informa.",
+  "O caminho de dados do grupo IBSCBS está COMPLETO da API ao provider. " +
+    "Falta a UI: nenhum formulário coleta CST/cClassTrib ainda. Quando for " +
+    "feita, usar a view `cclasstrib_nfse` para oferecer só os 71 códigos " +
+    "válidos, em vez dos 164.",
   "As colunas de redução, os indicadores e o tipo de alíquota JÁ FORAM " +
     "PREENCHIDOS (migration de complemento). Falta usar `perc_reducao_ibs`/" +
     "`perc_reducao_cbs` no cálculo: hoje a redução ainda vem do enum " +
@@ -360,8 +410,21 @@ export const PENDENCIAS_C5 = [
     "cruzada (Anexo VIII), não campo livre. Hoje é string opcional no input.",
   "Confirmar o caminho XML de opSimpNac/regApIBSCBSSN (dentro ou fora do " +
     "grupo IBSCBS) antes de montar o payload com esses campos.",
-  "Confirmar se a fórmula de base de cálculo da NT-009 substitui ou coexiste " +
-    "com a da NT-004.",
+  // RESOLVIDA em 06/08/2026 pela leitura das duas NTs na fonte oficial
+  // (gov.br/nfse). Mantida no array em vez de apagada, para registrar a
+  // resposta — quem ler depois não deve precisar refazer a mesma dúvida.
+  "RESOLVIDA — NT-004 vs NT-009 na base de cálculo: não há divergência nem " +
+    "coexistência a resolver. A NT-009 ATUALIZA a NT-004 (mesma estrutura, com " +
+    "`vCalcReeRepRes` renomeado para `vCalcAjusteBCIBSCBS` e a alternativa " +
+    "`vCalcAjusteBCLocImoveis` acrescentada, para locação de imóveis). " +
+    "Implementada em calcularBaseIbsCbs() na redação da NT-009.",
+  "A fórmula do vBC está implementada e testada, mas NENHUM formulário coleta " +
+    "desconto incondicionado, ajuste de base, PIS e COFINS ainda. Na prática " +
+    "esses termos chegam zerados e só o ISSQN é de fato deduzido.",
+  "As alíquotas de 2027+ NÃO estão fixadas por Resolução do Senado. " +
+    "aliquotasReferencia() agora lança AliquotaNaoFixadaError nesses anos, em " +
+    "vez de devolver o par de teste de 2026 — mas isso significa que a emissão " +
+    "PARA a partir de 01/01/2027 até alguém configurar o valor publicado.",
   "Não há data confirmada de obrigatoriedade do PREENCHIMENTO do grupo IBSCBS " +
     "na NFS-e — o Ato Conjunto 4/2026 rege a obrigatoriedade de EMISSÃO do " +
     "documento. A NF-e teve as datas de produção suspensas na NT 2025.002 " +

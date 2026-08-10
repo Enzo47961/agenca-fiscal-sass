@@ -5,9 +5,11 @@ import { createSessionClient, empresaDaSessao } from "@/lib/supabase/server";
 import { serverEnv } from "@/lib/env";
 import {
   atualizarDadosFiscais,
+  atualizarProviderFiscal,
   dadosFiscaisSchema,
   salvarCertificadoA1,
 } from "@/services/empresas";
+import { nomesDeProvidersDisponiveis } from "@/lib/fiscal/providers";
 
 export interface ActionResult {
   ok: boolean;
@@ -42,6 +44,26 @@ export async function salvarDadosFiscaisAction(formData: FormData): Promise<Acti
 
   try {
     await atualizarDadosFiscais(db, { empresaId: sessao.empresaId, dados: parse.data });
+    revalidatePath("/dashboard/configuracoes");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, erro: e instanceof Error ? e.message : "Erro ao salvar." };
+  }
+}
+
+export async function salvarProviderFiscalAction(formData: FormData): Promise<ActionResult> {
+  const db = createSessionClient();
+  const sessao = await empresaDaSessao(db);
+  if (!sessao) return { ok: false, erro: "Sessão expirada. Faça login novamente." };
+
+  const provider = String(formData.get("providerFiscal") ?? "");
+
+  try {
+    await atualizarProviderFiscal(db, {
+      empresaId: sessao.empresaId,
+      provider,
+      disponiveis: nomesDeProvidersDisponiveis(),
+    });
     revalidatePath("/dashboard/configuracoes");
     return { ok: true };
   } catch (e) {

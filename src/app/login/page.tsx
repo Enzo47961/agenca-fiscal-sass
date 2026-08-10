@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { FileCheck2, Loader2, LockKeyhole, Mail, MessageCircle, ShieldCheck } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 import { publicEnv } from "@/lib/env";
+import { destinoSeguro } from "@/lib/redirect-seguro";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,7 +38,14 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    // O middleware anexa `?next=` quando a sessão expira no meio da navegação.
+    // Sem isto o usuário sempre volta ao painel genérico em vez da tela que ele
+    // tentou abrir. Lido de `window` (e não de `useSearchParams`) para não exigir
+    // um limite de Suspense nesta página — aqui já estamos no browser.
+    // `destinoSeguro` se aplica mesmo assim: `next` continua vindo da URL.
+    const proximo = destinoSeguro(new URLSearchParams(window.location.search).get("next"));
+
+    router.push(proximo);
     router.refresh();
   }
 

@@ -37,3 +37,31 @@ describe("solicitarEmissaoSchema", () => {
     expect(() => solicitarEmissaoSchema.parse({ ...base, aliquotaIss: 2 })).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Grupo IBSCBS na criação da nota
+// ---------------------------------------------------------------------------
+
+describe("solicitarEmissaoSchema — grupo IBSCBS", () => {
+  it("nota sem declaração continua válida (o grupo é opcional)", () => {
+    const r = solicitarEmissaoSchema.parse(base);
+    expect(r.declaracaoIbsCbs).toBeUndefined();
+  });
+
+  it("aceita uma declaração bem formada", () => {
+    const r = solicitarEmissaoSchema.parse({
+      ...base,
+      declaracaoIbsCbs: { cst: "200", cClassTrib: "200027" },
+    });
+    expect(r.declaracaoIbsCbs?.cClassTrib).toBe("200027");
+  });
+
+  it("rejeita CST e cClassTrib com formato inválido já no schema", () => {
+    expect(() =>
+      solicitarEmissaoSchema.parse({ ...base, declaracaoIbsCbs: { cst: "20", cClassTrib: "200027" } }),
+    ).toThrow();
+    expect(() =>
+      solicitarEmissaoSchema.parse({ ...base, declaracaoIbsCbs: { cst: "200", cClassTrib: "2000" } }),
+    ).toThrow();
+  });
+});

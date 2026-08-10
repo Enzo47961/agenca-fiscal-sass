@@ -1,0 +1,873 @@
+From cd51abaa0c089563ebdc7e4ebef1613211435b4f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 6 Aug 2026 20:09:59 +0000
+Subject: [PATCH] fix(seguranca): middleware de sessao, open redirect no
+ callback e MEI x simples por fora
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A3 — src/middleware.ts. O `setAll` de lib/supabase/server.ts ja engolia a
+excecao com o comentario "middleware cuida do refresh", mas o arquivo nao
+existia: o token de 1h nunca era renovado e o usuario era deslogado sozinho
+no meio do trabalho. O matcher exclui `api/**` de proposito — webhooks
+(Focus, Asaas) e Inngest autenticam por token e um 307 para /login seria
+lido pelo provedor como falha de entrega.
+
+A4 — open redirect em /auth/callback?next=. O destino ia direto para
+NextResponse.redirect sem validacao, e nesse ponto a sessao JA existe: o
+link ostenta o nosso dominio e entrega um usuario autenticado no dominio do
+atacante. `destinoSeguro` so aceita caminho relativo a raiz, recusando
+protocol-relative, barra invertida e controle (inclusive percent-encoded);
+`urlDeRedirecionamento` confere a origem depois da resolucao.
+
+A5 — dadosFiscaisSchema recusa `simplesPorFora` fora do Simples Nacional.
+A marcacao e a opcao do optante pelo Simples de apurar IBS/CBS pelo regime
+regular; no lucro presumido/real nao muda nada e no MEI promete um
+comportamento que o sistema nao implementa. A duvida normativa sobre o MEI
+esta marcada como PENDENTE no schema. A constante fica em lib/fiscal/regimes
+para que a tela e o schema nao divirjam.
+
+DoD: typecheck OK, lint OK, 206 testes OK, build OK.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014hSNh7NPQPvQ9pGQuzZT1z
+---
+ src/app/auth/callback/route.ts                |  10 +-
+ .../dashboard/configuracoes/formulario.tsx    |  43 ++++++--
+ src/app/login/page.tsx                        |  10 +-
+ src/lib/fiscal/regimes.ts                     |  15 +++
+ src/lib/redirect-seguro.test.ts               |  90 +++++++++++++++
+ src/lib/redirect-seguro.ts                    |  93 ++++++++++++++++
+ src/lib/rotas.test.ts                         |  87 +++++++++++++++
+ src/lib/rotas.ts                              |  53 +++++++++
+ src/middleware.ts                             |  89 +++++++++++++++
+ src/services/empresas.test.ts                 | 103 +++++++++++++++++-
+ src/services/empresas.ts                      |  76 ++++++++++---
+ 11 files changed, 636 insertions(+), 33 deletions(-)
+ create mode 100644 src/lib/fiscal/regimes.ts
+ create mode 100644 src/lib/redirect-seguro.test.ts
+ create mode 100644 src/lib/redirect-seguro.ts
+ create mode 100644 src/lib/rotas.test.ts
+ create mode 100644 src/lib/rotas.ts
+ create mode 100644 src/middleware.ts
+
+diff --git a/src/app/auth/callback/route.ts b/src/app/auth/callback/route.ts
+index fb26f4c..b9dcbc4 100644
+--- a/src/app/auth/callback/route.ts
++++ b/src/app/auth/callback/route.ts
+@@ -1,19 +1,25 @@
+ import { NextResponse, type NextRequest } from "next/server";
+ import { createSessionClient } from "@/lib/supabase/server";
++import { urlDeRedirecionamento } from "@/lib/redirect-seguro";
+ 
+ /**
+  * Callback dos links de e-mail do Supabase (confirmação de conta e login).
+  * Troca o `code` por uma sessão (cookies) e redireciona para o painel.
++ *
++ * O `next` chega pela URL, logo é entrada do usuário e não pode ser usado como
++ * destino sem validação — ver `lib/redirect-seguro.ts`. Aqui o risco é maior
++ * que o normal: neste ponto a sessão JÁ foi criada, então um destino externo
++ * receberia um usuário autenticado vindo de um link que ostenta o nosso domínio.
+  */
+ export async function GET(request: NextRequest) {
+   const code = request.nextUrl.searchParams.get("code");
+-  const destino = request.nextUrl.searchParams.get("next") ?? "/dashboard";
++  const destino = request.nextUrl.searchParams.get("next");
+ 
+   if (code) {
+     const supabase = createSessionClient();
+     const { error } = await supabase.auth.exchangeCodeForSession(code);
+     if (!error) {
+-      return NextResponse.redirect(new URL(destino, request.url));
++      return NextResponse.redirect(urlDeRedirecionamento(destino, request.url));
+     }
+   }
+ 
+diff --git a/src/app/dashboard/configuracoes/formulario.tsx b/src/app/dashboard/configuracoes/formulario.tsx
+index 584265e..7b4f5ec 100644
+--- a/src/app/dashboard/configuracoes/formulario.tsx
++++ b/src/app/dashboard/configuracoes/formulario.tsx
+@@ -16,6 +16,7 @@ import {
+ // `import type` é apagado na compilação: o módulo de providers é server-only
+ // (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
+ import type { ProviderInfo } from "@/lib/fiscal/providers";
++import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+ import {
+   salvarDadosFiscaisAction,
+   salvarProviderFiscalAction,
+@@ -207,6 +208,7 @@ export function FormularioConfiguracoes({
+   }
+ 
+   const regimeSelecionado = REGIMES.find((r) => r.valor === regime);
++  const aceitaSimplesPorFora = regime === REGIME_COM_SIMPLES_POR_FORA;
+   const providerSelecionado = providers.find((p) => p.nome === provider);
+ 
+   return (
+@@ -299,18 +301,35 @@ export function FormularioConfiguracoes({
+             </Ajuda>
+           </label>
+ 
+-          <label className="flex items-start gap-2 sm:col-span-2">
+-            <input
+-              type="checkbox"
+-              name="simplesPorFora"
+-              defaultChecked={dadosIniciais.simplesPorFora}
+-              className="mt-1 h-4 w-4 rounded border-slate-300"
+-            />
+-            <span className="text-sm text-slate-600">
+-              Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
+-              crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por dentro&quot;.
+-            </span>
+-          </label>
++          {/*
++            A caixa some fora do Simples Nacional. O schema já recusa a combinação
++            (dadosFiscaisSchema.superRefine), mas deixá-la visível para MEI e lucro
++            presumido/real convidaria o usuário a um erro que só apareceria depois
++            de salvar. Sumindo, o campo nem vai no FormData e vira `false`.
++          */}
++          {aceitaSimplesPorFora ? (
++            <label className="flex items-start gap-2 sm:col-span-2">
++              <input
++                type="checkbox"
++                name="simplesPorFora"
++                defaultChecked={dadosIniciais.simplesPorFora}
++                className="mt-1 h-4 w-4 rounded border-slate-300"
++              />
++              <span className="text-sm text-slate-600">
++                Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
++                crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por
++                dentro&quot;.
++              </span>
++            </label>
++          ) : (
++            <p className="text-sm text-slate-500 sm:col-span-2">
++              A opção <strong>Simples Nacional &quot;por fora&quot;</strong> aparece apenas para
++              optantes pelo Simples Nacional.{" "}
++              {regime === "mei"
++                ? "O MEI tem tratamento próprio no IBS/CBS."
++                : "Neste regime o IBS/CBS já é apurado pelo regime regular."}
++            </p>
++          )}
+         </div>
+ 
+         {/* ---- Seletor visual de regime tributário ---- */}
+diff --git a/src/app/login/page.tsx b/src/app/login/page.tsx
+index fd55944..d464064 100644
+--- a/src/app/login/page.tsx
++++ b/src/app/login/page.tsx
+@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
+ import { FileCheck2, Loader2, LockKeyhole, Mail, MessageCircle, ShieldCheck } from "lucide-react";
+ import { createBrowserSupabase } from "@/lib/supabase/browser";
+ import { publicEnv } from "@/lib/env";
++import { destinoSeguro } from "@/lib/redirect-seguro";
+ 
+ export default function LoginPage() {
+   const router = useRouter();
+@@ -37,7 +38,14 @@ export default function LoginPage() {
+       return;
+     }
+ 
+-    router.push("/dashboard");
++    // O middleware anexa `?next=` quando a sessão expira no meio da navegação.
++    // Sem isto o usuário sempre volta ao painel genérico em vez da tela que ele
++    // tentou abrir. Lido de `window` (e não de `useSearchParams`) para não exigir
++    // um limite de Suspense nesta página — aqui já estamos no browser.
++    // `destinoSeguro` se aplica mesmo assim: `next` continua vindo da URL.
++    const proximo = destinoSeguro(new URLSearchParams(window.location.search).get("next"));
++
++    router.push(proximo);
+     router.refresh();
+   }
+ 
+diff --git a/src/lib/fiscal/regimes.ts b/src/lib/fiscal/regimes.ts
+new file mode 100644
+index 0000000..3668b1a
+--- /dev/null
++++ b/src/lib/fiscal/regimes.ts
+@@ -0,0 +1,15 @@
++/**
++ * Constantes de regime tributário compartilhadas entre servidor e cliente.
++ *
++ * Módulo puro de propósito: `services/empresas.ts` importa `node:crypto` e não
++ * pode entrar no bundle do browser, mas o formulário de configurações precisa
++ * da MESMA regra para decidir se mostra o campo. Duplicar a string nos dois
++ * lados é como a validação e a tela divergem — a tela oferece o campo, o schema
++ * recusa o valor, e o usuário só descobre depois de salvar.
++ */
++
++/**
++ * Único regime em que a marcação "Simples Nacional por fora" tem efeito.
++ * A justificativa completa está em `dadosFiscaisSchema` (services/empresas.ts).
++ */
++export const REGIME_COM_SIMPLES_POR_FORA = "simples_nacional";
+diff --git a/src/lib/redirect-seguro.test.ts b/src/lib/redirect-seguro.test.ts
+new file mode 100644
+index 0000000..623bcfc
+--- /dev/null
++++ b/src/lib/redirect-seguro.test.ts
+@@ -0,0 +1,90 @@
++import { describe, it, expect } from "vitest";
++import { destinoSeguro, urlDeRedirecionamento, DESTINO_PADRAO } from "@/lib/redirect-seguro";
++
++describe("destinoSeguro", () => {
++  it("aceita caminho relativo à raiz", () => {
++    expect(destinoSeguro("/dashboard/notas")).toBe("/dashboard/notas");
++    expect(destinoSeguro("/dashboard?filtro=erro#topo")).toBe("/dashboard?filtro=erro#topo");
++  });
++
++  it("usa o padrão quando o parâmetro está ausente ou vazio", () => {
++    expect(destinoSeguro(null)).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro(undefined)).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("   ")).toBe(DESTINO_PADRAO);
++  });
++
++  it("respeita um fallback customizado", () => {
++    expect(destinoSeguro(null, "/onboarding")).toBe("/onboarding");
++  });
++
++  // O caso que dá nome ao problema: o link diz o nosso domínio, o usuário chega
++  // autenticado no domínio do atacante.
++  it("recusa URL absoluta", () => {
++    expect(destinoSeguro("https://phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("http://phishing.exemplo/dashboard")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("HTTPS://phishing.exemplo")).toBe(DESTINO_PADRAO);
++  });
++
++  it("recusa esquemas executáveis", () => {
++    expect(destinoSeguro("javascript:alert(1)")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("data:text/html,<script>")).toBe(DESTINO_PADRAO);
++  });
++
++  // Começa com "/", passaria em qualquer checagem ingênua, e o navegador
++  // resolve como https://phishing.exemplo.
++  it("recusa URL protocol-relative", () => {
++    expect(destinoSeguro("//phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("//phishing.exemplo/dashboard")).toBe(DESTINO_PADRAO);
++  });
++
++  it("recusa barra invertida em qualquer posição", () => {
++    expect(destinoSeguro("/\\phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/\\/phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("\\\\phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/dashboard\\..\\x")).toBe(DESTINO_PADRAO);
++  });
++
++  it("recusa caracteres de controle, crus ou percent-encoded", () => {
++    expect(destinoSeguro("/\t/phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/%09/phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/%0d%0a/phishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/%5cphishing.exemplo")).toBe(DESTINO_PADRAO);
++    expect(destinoSeguro("/%2f%2fphishing.exemplo")).toBe(DESTINO_PADRAO);
++  });
++
++  it("recusa percent-encoding malformado em vez de adivinhar", () => {
++    expect(destinoSeguro("/%zz")).toBe(DESTINO_PADRAO);
++  });
++
++  it("devolve o valor original, não a versão decodificada", () => {
++    // A decodificação existe só para inspecionar. Devolver o valor decodificado
++    // mudaria o destino real do redirecionamento.
++    expect(destinoSeguro("/dashboard/nota%20fiscal")).toBe("/dashboard/nota%20fiscal");
++  });
++});
++
++describe("urlDeRedirecionamento", () => {
++  const BASE = "https://app.exemplo.com.br/auth/callback?code=abc";
++
++  it("resolve caminho relativo contra a origem da requisição", () => {
++    const url = urlDeRedirecionamento("/dashboard/notas", BASE);
++    expect(url.toString()).toBe("https://app.exemplo.com.br/dashboard/notas");
++  });
++
++  it("nunca sai da origem, mesmo com entrada hostil", () => {
++    for (const hostil of [
++      "https://phishing.exemplo",
++      "//phishing.exemplo",
++      "/\\phishing.exemplo",
++      "javascript:alert(1)",
++    ]) {
++      expect(urlDeRedirecionamento(hostil, BASE).origin).toBe("https://app.exemplo.com.br");
++    }
++  });
++
++  it("cai no fallback informado quando o destino é recusado", () => {
++    const url = urlDeRedirecionamento("https://phishing.exemplo", BASE, "/login?erro=x");
++    expect(url.toString()).toBe("https://app.exemplo.com.br/login?erro=x");
++  });
++});
+diff --git a/src/lib/redirect-seguro.ts b/src/lib/redirect-seguro.ts
+new file mode 100644
+index 0000000..c23419b
+--- /dev/null
++++ b/src/lib/redirect-seguro.ts
+@@ -0,0 +1,93 @@
++/**
++ * Validação do parâmetro `next` dos fluxos de autenticação.
++ *
++ * O problema que isto resolve é um open redirect. Sem validação,
++ * `/auth/callback?code=...&next=https://phishing.exemplo` faz o NOSSO domínio
++ * despachar o usuário recém-autenticado para um site de terceiros. O link que
++ * a vítima recebeu e clicou aponta para o nosso domínio — é ele que aparece no
++ * e-mail, no chat e no histórico —, e é justamente essa aparência de
++ * legitimidade que o ataque compra. Pior no nosso caso: no instante do
++ * redirecionamento a sessão JÁ existe, então a página de destino recebe um
++ * usuário logado, pronto para digitar senha de novo em um formulário clonado.
++ *
++ * A regra é deliberadamente restritiva: só passa caminho relativo à raiz. É
++ * mais fácil defender "aceito apenas /algo" do que enumerar todas as formas de
++ * escrever uma URL absoluta — e são muitas, porque o parser do navegador é
++ * tolerante de um jeito que o nosso não precisa ser.
++ */
++
++/** Destino usado quando `next` está ausente ou é recusado. */
++export const DESTINO_PADRAO = "/dashboard";
++
++/**
++ * Formas de escapar do nosso domínio que o navegador aceita e uma checagem
++ * ingênua de `startsWith("/")` deixaria passar:
++ *
++ * - `//evil.com`      → URL protocol-relative: vira `https://evil.com`.
++ * - `/\evil.com`      → navegadores normalizam `\` para `/`, então equivale ao anterior.
++ * - `/\/evil.com`     → mesma ideia, misturando as duas barras.
++ * - `/%09/evil.com`   → tab/CR/LF são descartados por alguns parsers antes da normalização.
++ *
++ * Por isso a barra invertida é recusada em qualquer posição e caracteres de
++ * controle também — inclusive na forma percent-encoded, que decodificamos só
++ * para inspecionar, nunca para devolver.
++ */
++// eslint-disable-next-line no-control-regex
++const CONTROLE = /[\x00-\x1f\x7f]/;
++
++export function destinoSeguro(
++  valor: string | null | undefined,
++  fallback: string = DESTINO_PADRAO,
++): string {
++  if (typeof valor !== "string") return fallback;
++
++  const bruto = valor.trim();
++  if (bruto === "") return fallback;
++
++  // Caminho relativo à raiz e nada mais. Isto já elimina `https://`, `javascript:`,
++  // `data:` e qualquer esquema, porque todos precisam de algo antes da primeira barra.
++  if (!bruto.startsWith("/")) return fallback;
++
++  // Protocol-relative e suas variantes com barra invertida.
++  if (bruto.startsWith("//")) return fallback;
++  if (bruto.includes("\\")) return fallback;
++
++  if (CONTROLE.test(bruto)) return fallback;
++
++  // Percent-encoding pode esconder tudo que foi recusado acima. Decodificar aqui
++  // é só para INSPECIONAR: o valor devolvido continua sendo o original.
++  let decodificado: string;
++  try {
++    decodificado = decodeURIComponent(bruto);
++  } catch {
++    // Sequência percent malformada — não dá para saber o que vira no navegador.
++    return fallback;
++  }
++  if (
++    decodificado.startsWith("//") ||
++    decodificado.includes("\\") ||
++    CONTROLE.test(decodificado)
++  ) {
++    return fallback;
++  }
++
++  return bruto;
++}
++
++/**
++ * Última linha de defesa, para uso junto de `new URL(destino, base)`.
++ *
++ * `destinoSeguro` já basta para os casos conhecidos, mas quem resolve a URL
++ * final é o parser do runtime, não a nossa regex. Comparar a origem depois da
++ * resolução transforma qualquer forma de escape que a gente não previu em um
++ * fallback silencioso em vez de um redirecionamento para fora.
++ */
++export function urlDeRedirecionamento(
++  valor: string | null | undefined,
++  base: string,
++  fallback: string = DESTINO_PADRAO,
++): URL {
++  const origem = new URL(base);
++  const candidata = new URL(destinoSeguro(valor, fallback), origem);
++  return candidata.origin === origem.origin ? candidata : new URL(fallback, origem);
++}
+diff --git a/src/lib/rotas.test.ts b/src/lib/rotas.test.ts
+new file mode 100644
+index 0000000..bd5617d
+--- /dev/null
++++ b/src/lib/rotas.test.ts
+@@ -0,0 +1,87 @@
++import { describe, it, expect } from "vitest";
++import { decidirRota, rotaExigeSessao } from "@/lib/rotas";
++import { destinoSeguro } from "@/lib/redirect-seguro";
++
++describe("rotaExigeSessao", () => {
++  it("protege o painel e o onboarding, inclusive subrotas", () => {
++    expect(rotaExigeSessao("/dashboard")).toBe(true);
++    expect(rotaExigeSessao("/dashboard/notas/nova")).toBe(true);
++    expect(rotaExigeSessao("/onboarding")).toBe(true);
++  });
++
++  it("deixa passar as páginas públicas", () => {
++    for (const rota of ["/", "/login", "/cadastro", "/termos", "/privacidade", "/auth/callback"]) {
++      expect(rotaExigeSessao(rota)).toBe(false);
++    }
++  });
++
++  // Comparar por prefixo cru faria "/dashboard-publico" cair na regra do painel.
++  it("não confunde rota que apenas começa com o mesmo texto", () => {
++    expect(rotaExigeSessao("/dashboards")).toBe(false);
++    expect(rotaExigeSessao("/dashboard-publico")).toBe(false);
++    expect(rotaExigeSessao("/onboardingx")).toBe(false);
++  });
++});
++
++describe("decidirRota", () => {
++  it("manda visitante para o login preservando a tela pretendida", () => {
++    const d = decidirRota({ pathname: "/dashboard/notas", temUsuario: false });
++    expect(d).toEqual({ tipo: "redirecionar", destino: "/login?next=%2Fdashboard%2Fnotas" });
++  });
++
++  it("preserva também a query string da tela pretendida", () => {
++    const d = decidirRota({
++      pathname: "/dashboard/cobrancas/nova",
++      busca: "?cliente=abc",
++      temUsuario: false,
++    });
++    expect(d).toEqual({
++      tipo: "redirecionar",
++      destino: "/login?next=%2Fdashboard%2Fcobrancas%2Fnova%3Fcliente%3Dabc",
++    });
++  });
++
++  // O `next` que geramos volta para nós depois do login. Se ele não sobrevivesse
++  // à própria validação de open redirect, o usuário seria jogado no painel
++  // genérico e a preservação de destino não teria efeito nenhum.
++  it("o next gerado sobrevive à validação de destino seguro", () => {
++    const d = decidirRota({ pathname: "/dashboard/notas", busca: "?status=erro", temUsuario: false });
++    if (d.tipo !== "redirecionar") throw new Error("esperava redirecionamento");
++
++    const next = new URL(d.destino, "https://app.exemplo.com.br").searchParams.get("next");
++    expect(destinoSeguro(next)).toBe("/dashboard/notas?status=erro");
++  });
++
++  it("deixa o visitante seguir nas rotas públicas", () => {
++    expect(decidirRota({ pathname: "/", temUsuario: false })).toEqual({ tipo: "seguir" });
++    expect(decidirRota({ pathname: "/login", temUsuario: false })).toEqual({ tipo: "seguir" });
++  });
++
++  it("tira o usuário logado das telas de entrada", () => {
++    expect(decidirRota({ pathname: "/login", temUsuario: true })).toEqual({
++      tipo: "redirecionar",
++      destino: "/dashboard",
++    });
++    expect(decidirRota({ pathname: "/cadastro", temUsuario: true })).toEqual({
++      tipo: "redirecionar",
++      destino: "/dashboard",
++    });
++  });
++
++  it("deixa o usuário logado seguir no painel", () => {
++    expect(decidirRota({ pathname: "/dashboard/notas", temUsuario: true })).toEqual({
++      tipo: "seguir",
++    });
++  });
++
++  // Recuperação de senha usa link de e-mail e precisa funcionar mesmo com
++  // sessão ativa em outra aba — mandar para o painel quebraria a troca de senha.
++  it("não sequestra as telas de recuperação de senha", () => {
++    expect(decidirRota({ pathname: "/recuperar-senha", temUsuario: true })).toEqual({
++      tipo: "seguir",
++    });
++    expect(decidirRota({ pathname: "/redefinir-senha", temUsuario: true })).toEqual({
++      tipo: "seguir",
++    });
++  });
++});
+diff --git a/src/lib/rotas.ts b/src/lib/rotas.ts
+new file mode 100644
+index 0000000..15b01c6
+--- /dev/null
++++ b/src/lib/rotas.ts
+@@ -0,0 +1,53 @@
++/**
++ * Decisão de roteamento por sessão, isolada do runtime do Next.
++ *
++ * Está separada do `middleware.ts` por um motivo prático: middleware roda no
++ * Edge Runtime e depende de `NextRequest`/`NextResponse`, o que torna o teste
++ * caro e indireto. A regra em si — quem pode ver o quê — é lógica pura e
++ * merece teste direto. O middleware fica sendo só a casca que lê o usuário e
++ * aplica a decisão.
++ */
++
++/** Prefixos que exigem sessão válida. */
++export const PREFIXOS_PROTEGIDOS = ["/dashboard", "/onboarding"] as const;
++
++/** Páginas de entrada que não fazem sentido para quem já está logado. */
++export const PREFIXOS_DE_AUTENTICACAO = ["/login", "/cadastro"] as const;
++
++function casaPrefixo(pathname: string, prefixos: readonly string[]): boolean {
++  return prefixos.some((p) => pathname === p || pathname.startsWith(`${p}/`));
++}
++
++export function rotaExigeSessao(pathname: string): boolean {
++  return casaPrefixo(pathname, PREFIXOS_PROTEGIDOS);
++}
++
++export type DecisaoRota = { tipo: "seguir" } | { tipo: "redirecionar"; destino: string };
++
++/**
++ * `busca` é a query string COM o "?" (o formato de `nextUrl.search`), ou "".
++ *
++ * O `next` preservado no redirecionamento é o que evita o efeito mais chato de
++ * uma sessão expirada: o usuário clica em "Notas", cai no login, entra, e vai
++ * parar no painel genérico em vez da tela que ele queria. Ele é reconstruído
++ * aqui a partir do pathname real — nunca copiado de um `next` que o usuário
++ * tenha mandado —, então não há como transformar isto em open redirect.
++ */
++export function decidirRota(params: {
++  pathname: string;
++  busca?: string;
++  temUsuario: boolean;
++}): DecisaoRota {
++  const { pathname, busca = "", temUsuario } = params;
++
++  if (!temUsuario && rotaExigeSessao(pathname)) {
++    const alvo = `${pathname}${busca}`;
++    return { tipo: "redirecionar", destino: `/login?next=${encodeURIComponent(alvo)}` };
++  }
++
++  if (temUsuario && casaPrefixo(pathname, PREFIXOS_DE_AUTENTICACAO)) {
++    return { tipo: "redirecionar", destino: "/dashboard" };
++  }
++
++  return { tipo: "seguir" };
++}
+diff --git a/src/middleware.ts b/src/middleware.ts
+new file mode 100644
+index 0000000..a850f01
+--- /dev/null
++++ b/src/middleware.ts
+@@ -0,0 +1,89 @@
++import { NextResponse, type NextRequest } from "next/server";
++import { createServerClient } from "@supabase/ssr";
++import { publicEnv } from "@/lib/env";
++import { decidirRota } from "@/lib/rotas";
++
++/**
++ * Middleware de sessão.
++ *
++ * Existe por dois motivos, nessa ordem de importância:
++ *
++ * 1. RENOVAR O TOKEN. O access token do Supabase é curto (1h). Server Components
++ *    conseguem LER cookie mas não conseguem ESCREVER — é por isso que o
++ *    `setAll` de `lib/supabase/server.ts` engole a exceção com o comentário
++ *    "middleware cuida do refresh". Sem este arquivo, esse comentário era uma
++ *    promessa não cumprida: o refresh token nunca era trocado e o usuário era
++ *    deslogado sozinho depois de uma hora, no meio do trabalho.
++ *
++ * 2. Barrar visitante antes de renderizar. As páginas já checam sessão por
++ *    conta própria (`estadoDaSessao`) e continuam checando — a segurança de
++ *    verdade está na RLS do banco, não aqui. O ganho é de experiência: sem
++ *    isso o painel monta, dispara queries e só então redireciona.
++ *
++ * O que este arquivo NÃO faz: decidir se o usuário tem empresa. Isso exige uma
++ * consulta a `empresa_membros` e sairia caro em toda navegação; quem resolve
++ * continua sendo `estadoDaSessao` na página.
++ */
++export async function middleware(request: NextRequest) {
++  // A resposta precisa existir ANTES do getUser(): é nela que os cookies
++  // renovados são escritos. Devolver uma resposta criada depois perderia o
++  // token novo, e o usuário seria deslogado no request seguinte.
++  let resposta = NextResponse.next({ request });
++  const env = publicEnv();
++
++  const supabase = createServerClient(
++    env.NEXT_PUBLIC_SUPABASE_URL,
++    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
++    {
++      cookies: {
++        getAll: () => request.cookies.getAll(),
++        setAll: (cookiesToSet) => {
++          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
++          resposta = NextResponse.next({ request });
++          cookiesToSet.forEach(({ name, value, options }) =>
++            resposta.cookies.set(name, value, options),
++          );
++        },
++      },
++    },
++  );
++
++  // getUser() — e não getSession() — porque só ele valida o JWT contra o
++  // servidor de auth. getSession() confia no cookie, que o cliente controla.
++  const {
++    data: { user },
++  } = await supabase.auth.getUser();
++
++  const decisao = decidirRota({
++    pathname: request.nextUrl.pathname,
++    busca: request.nextUrl.search,
++    temUsuario: user !== null,
++  });
++
++  if (decisao.tipo === "redirecionar") {
++    const url = new URL(decisao.destino, request.url);
++    // Os cookies renovados vão junto: se o refresh aconteceu neste mesmo
++    // request, jogá-los fora faria o usuário rodar o refresh de novo na
++    // próxima navegação, com o token velho.
++    const redirecionamento = NextResponse.redirect(url);
++    resposta.cookies.getAll().forEach((cookie) => redirecionamento.cookies.set(cookie));
++    return redirecionamento;
++  }
++
++  return resposta;
++}
++
++export const config = {
++  matcher: [
++    /**
++     * Tudo, exceto:
++     * - `api/**`   → webhooks (Focus, Asaas) e Inngest autenticam por token, não
++     *                por cookie. Redirecionar um webhook para /login o quebraria,
++     *                e o provedor leria o 307 como falha de entrega.
++     * - `auth/**`  → o callback é justamente quem CRIA a sessão; rodar o refresh
++     *                antes disso é trabalho perdido.
++     * - estáticos  → não têm sessão para renovar.
++     */
++    "/((?!api|auth|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
++  ],
++};
+diff --git a/src/services/empresas.test.ts b/src/services/empresas.test.ts
+index 69b9811..45468c6 100644
+--- a/src/services/empresas.test.ts
++++ b/src/services/empresas.test.ts
+@@ -1,5 +1,10 @@
+ import { describe, it, expect } from "vitest";
+-import { atualizarProviderFiscal } from "@/services/empresas";
++import {
++  atualizarDadosFiscais,
++  atualizarProviderFiscal,
++  dadosFiscaisSchema,
++} from "@/services/empresas";
++import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+ import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
+ 
+ /**
+@@ -79,3 +84,99 @@ describe("atualizarProviderFiscal", () => {
+     ).rejects.toThrow(/RLS negou/);
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// dadosFiscaisSchema: "Simples por fora" x regime tributário
++//
++// O campo é gravado em `empresas.simples_por_fora` e a intenção é que ele
++// influencie o enquadramento IBS/CBS. Aceitá-lo em um regime onde não se aplica
++// grava uma marcação que o resto do sistema ignora — e o usuário fica achando
++// que fez uma escolha fiscal que nunca aconteceu.
++// ---------------------------------------------------------------------------
++
++const BASE = {
++  razaoSocial: "Empresa Teste LTDA",
++  cnpj: "12345678000199",
++  codigoMunicipioIbge: "3550308",
++  emailContato: "contato@exemplo.com.br",
++} as const;
++
++describe("dadosFiscaisSchema — simplesPorFora", () => {
++  it("aceita a marcação no Simples Nacional", () => {
++    const r = dadosFiscaisSchema.safeParse({
++      ...BASE,
++      regimeTributario: "simples_nacional",
++      simplesPorFora: true,
++    });
++    expect(r.success).toBe(true);
++    if (r.success) expect(r.data.simplesPorFora).toBe(true);
++  });
++
++  it("recusa MEI com a marcação, e a mensagem explica o porquê", () => {
++    const r = dadosFiscaisSchema.safeParse({
++      ...BASE,
++      regimeTributario: "mei",
++      simplesPorFora: true,
++    });
++
++    expect(r.success).toBe(false);
++    if (!r.success) {
++      const issue = r.error.issues[0];
++      expect(issue?.path).toEqual(["simplesPorFora"]);
++      expect(issue?.message).toMatch(/MEI/);
++    }
++  });
++
++  it("recusa lucro presumido e lucro real com a marcação", () => {
++    for (const regimeTributario of ["lucro_presumido", "lucro_real"] as const) {
++      const r = dadosFiscaisSchema.safeParse({
++        ...BASE,
++        regimeTributario,
++        simplesPorFora: true,
++      });
++      expect(r.success).toBe(false);
++      if (!r.success) expect(r.error.issues[0]?.message).toMatch(/regime regular/);
++    }
++  });
++
++  // Sem isto, a validação viraria uma regra sobre o REGIME em vez de uma regra
++  // sobre a COMBINAÇÃO, e o MEI não conseguiria salvar nada.
++  it("não estorva regime nenhum quando a marcação está desligada", () => {
++    for (const regimeTributario of [
++      "simples_nacional",
++      "lucro_presumido",
++      "lucro_real",
++      "mei",
++    ] as const) {
++      expect(
++        dadosFiscaisSchema.safeParse({ ...BASE, regimeTributario, simplesPorFora: false }).success,
++      ).toBe(true);
++      // omitido = default false
++      expect(dadosFiscaisSchema.safeParse({ ...BASE, regimeTributario }).success).toBe(true);
++    }
++  });
++
++  it("a UI e o schema usam a MESMA constante de regime", () => {
++    // Divergência aqui é o cenário que a constante compartilhada existe para
++    // impedir: a tela oferecer o campo que o schema recusa.
++    expect(
++      dadosFiscaisSchema.safeParse({
++        ...BASE,
++        regimeTributario: REGIME_COM_SIMPLES_POR_FORA,
++        simplesPorFora: true,
++      }).success,
++    ).toBe(true);
++  });
++
++  it("atualizarDadosFiscais não grava a combinação inválida", async () => {
++    const { db, updates } = bancoFalso();
++    await expect(
++      atualizarDadosFiscais(db, {
++        empresaId: EMPRESA,
++        dados: { ...BASE, regimeTributario: "mei", simplesPorFora: true },
++      }),
++    ).rejects.toThrow();
++
++    expect(updates).toHaveLength(0);
++  });
++});
+diff --git a/src/services/empresas.ts b/src/services/empresas.ts
+index 18041c3..c8aa4c8 100644
+--- a/src/services/empresas.ts
++++ b/src/services/empresas.ts
+@@ -2,6 +2,7 @@ import { createCipheriv, randomBytes } from "node:crypto";
+ import { type SupabaseClient } from "@supabase/supabase-js";
+ import { z } from "zod";
+ import { type Database } from "@/types/database";
++import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+ 
+ /**
+  * Configurações da empresa: dados fiscais do CNPJ + certificado digital A1.
+@@ -11,22 +12,63 @@ import { type Database } from "@/types/database";
+  * também é criptografada. A chave vem de CERT_ENCRYPTION_KEY (env, regra 4).
+  */
+ 
+-export const dadosFiscaisSchema = z.object({
+-  razaoSocial: z.string().min(2).max(200),
+-  nomeFantasia: z.string().max(200).optional(),
+-  cnpj: z.string().regex(/^\d{14}$/, "CNPJ deve ter 14 dígitos (somente números)"),
+-  inscricaoMunicipal: z.string().max(30).optional(),
+-  codigoMunicipioIbge: z.string().regex(/^\d{7}$/, "Código IBGE deve ter 7 dígitos"),
+-  regimeTributario: z.enum(["simples_nacional", "lucro_presumido", "lucro_real", "mei"]),
+-  emailContato: z.string().email(),
+-  // Reforma tributária: CNAE (base do enquadramento) e escolha do Simples
+-  cnae: z
+-    .string()
+-    .regex(/^\d{7}$/, "CNAE deve ter 7 dígitos (somente números)")
+-    .optional(),
+-  simplesPorFora: z.boolean().default(false),
+-});
++/**
++ * Por que `REGIME_COM_SIMPLES_POR_FORA` existe e o que ele barra.
++ *
++ * "Simples por fora" é a opção do optante pelo Simples Nacional de apurar IBS e
++ * CBS pelo regime regular, destacando os tributos na nota para que o cliente
++ * B2B possa se creditar (LC 214/2025, no desenho da EC 132/2023).
++ *
++ * Nos demais regimes a marcação não tem para onde ir:
++ *
++ * - `lucro_presumido` / `lucro_real` — já apuram pelo regime regular por
++ *   definição. Aceitar a marcação não muda nada e ainda cria a expectativa
++ *   falsa de que mudou.
++ * - `mei` — no nosso modelo é um valor SEPARADO de `simples_nacional`, com
++ *   tratamento próprio. Oferecer a opção ali promete ao microempreendedor um
++ *   comportamento que o resto do sistema não implementa.
++ *
++ * PENDENTE (normativo, não técnico): confirmar com contador se o MEI pode, em
++ * alguma hipótese, optar pelo regime regular de IBS/CBS. Até que isso esteja
++ * respondido, a regra aqui é de consistência do MODELO — `mei` e
++ * `simples_nacional` são valores distintos do enum, e a marcação pertence a um
++ * só deles. Se a resposta vier "pode", o caminho é desmembrar o regime, não
++ * afrouxar esta validação.
++ */
++export const dadosFiscaisSchema = z
++  .object({
++    razaoSocial: z.string().min(2).max(200),
++    nomeFantasia: z.string().max(200).optional(),
++    cnpj: z.string().regex(/^\d{14}$/, "CNPJ deve ter 14 dígitos (somente números)"),
++    inscricaoMunicipal: z.string().max(30).optional(),
++    codigoMunicipioIbge: z.string().regex(/^\d{7}$/, "Código IBGE deve ter 7 dígitos"),
++    regimeTributario: z.enum(["simples_nacional", "lucro_presumido", "lucro_real", "mei"]),
++    emailContato: z.string().email(),
++    // Reforma tributária: CNAE (base do enquadramento) e escolha do Simples
++    cnae: z
++      .string()
++      .regex(/^\d{7}$/, "CNAE deve ter 7 dígitos (somente números)")
++      .optional(),
++    simplesPorFora: z.boolean().default(false),
++  })
++  .superRefine((d, ctx) => {
++    if (!d.simplesPorFora || d.regimeTributario === REGIME_COM_SIMPLES_POR_FORA) return;
++
++    ctx.addIssue({
++      code: z.ZodIssueCode.custom,
++      path: ["simplesPorFora"],
++      message:
++        d.regimeTributario === "mei"
++          ? 'MEI não pode marcar "Simples Nacional por fora". A opção de apurar IBS/CBS ' +
++            "pelo regime regular é do optante pelo Simples Nacional."
++          : 'A opção "Simples Nacional por fora" só existe para optantes pelo Simples ' +
++            "Nacional. No lucro presumido e no lucro real o IBS/CBS já é apurado pelo " +
++            "regime regular.",
++    });
++  });
+ 
++/** Entrada aceita: `simplesPorFora` tem default, então é opcional para quem chama. */
++export type DadosFiscaisInput = z.input<typeof dadosFiscaisSchema>;
+ export type DadosFiscais = z.infer<typeof dadosFiscaisSchema>;
+ 
+ /**
+@@ -36,7 +78,7 @@ export type DadosFiscais = z.infer<typeof dadosFiscaisSchema>;
+  */
+ export async function criarEmpresaComOwner(
+   db: SupabaseClient<Database>,
+-  dados: DadosFiscais,
++  dados: DadosFiscaisInput,
+ ): Promise<{ empresaId: string }> {
+   const d = dadosFiscaisSchema.parse(dados);
+ 
+@@ -65,7 +107,7 @@ export async function criarEmpresaComOwner(
+ 
+ export async function atualizarDadosFiscais(
+   db: SupabaseClient<Database>,
+-  params: { empresaId: string; dados: DadosFiscais },
++  params: { empresaId: string; dados: DadosFiscaisInput },
+ ): Promise<void> {
+   const d = dadosFiscaisSchema.parse(params.dados);
+ 
+-- 
+2.43.0
+

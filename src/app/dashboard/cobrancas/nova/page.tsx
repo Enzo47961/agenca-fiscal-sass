@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, Receipt } from "lucide-react";
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
-import { listarClientes } from "@/services/clientes";
+import { CLIENTES_POR_PAGINA_MAX, listarClientes } from "@/services/clientes";
 import { FormularioCobranca } from "./formulario";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,14 @@ export default async function NovaCobrancaPage({
   if (estado.tipo === "deslogado") redirect("/login");
   if (estado.tipo === "sem_empresa") redirect("/onboarding");
 
-  const clientes = await listarClientes(db, { empresaId: estado.empresaId });
+  // Este seletor precisa da lista inteira, mas "inteira" não pode ser
+  // ilimitada. Pede o teto e, se ainda assim houver mais, AVISA — truncar em
+  // silêncio faria o usuário concluir que o cliente sumiu do cadastro.
+  const pagina = await listarClientes(db, {
+    empresaId: estado.empresaId,
+    porPagina: CLIENTES_POR_PAGINA_MAX,
+  });
+  const clientes = pagina.itens;
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-8">
@@ -53,10 +60,22 @@ export default async function NovaCobrancaPage({
           para poder cobrar.
         </div>
       ) : (
-        <FormularioCobranca
-          clientes={clientes.map((c) => ({ id: c.id, nome: c.nome }))}
-          clientePreSelecionado={searchParams.cliente}
-        />
+        <>
+          {pagina.temMais ? (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Mostrando os primeiros {pagina.itens.length} de {pagina.total} clientes. Se o que
+              você procura não estiver aqui, use a busca na tela de{" "}
+              <Link href="/dashboard/clientes" className="font-medium underline">
+                Clientes
+              </Link>
+              .
+            </p>
+          ) : null}
+          <FormularioCobranca
+            clientes={clientes.map((c) => ({ id: c.id, nome: c.nome }))}
+            clientePreSelecionado={searchParams.cliente}
+          />
+        </>
       )}
     </main>
   );

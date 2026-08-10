@@ -9,6 +9,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolverProvider } from "@/lib/fiscal/providers";
 import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
+import { declaracaoDeColunas } from "@/lib/fiscal/ibscbs";
 import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 import {
   FiscalErrorPermanent,
@@ -136,6 +137,9 @@ export const emitirNfse = inngest.createFunction(
                 competencia: contexto.competencia,
                 codigoNbs: contexto.codigo_nbs,
                 reforma: {
+                  // Grupo IBSCBS gravado na criação da nota. Reconstruído a
+                  // partir das colunas — nunca inventado aqui.
+                  declaracao: declaracaoDeColunas(contexto),
                   regime: contexto.regime_ibscbs as RegimeIbsCbs,
                   cbsAliquota: Number(contexto.cbs_aliquota),
                   ibsAliquota: Number(contexto.ibs_aliquota),
@@ -401,3 +405,4 @@ function delayParaTentativa(tentativa: number): (typeof RETRY_DELAYS)[number] {
   }
   return delay;
 }
+

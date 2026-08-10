@@ -1,0 +1,630 @@
+From b4d8189a1614a31c5e0da3932f960528393863dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 6 Aug 2026 20:21:31 +0000
+Subject: [PATCH] feat(fiscal): formula da base de calculo do IBS/CBS (vBC) da
+ NT-009
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+B7 da auditoria pos-C5. O sistema usava o valor BRUTO do servico como base do
+IBS/CBS. A base da NFS-e nao e o bruto: e o bruto menos deducoes. Usar o bruto
+superestima a base e o tributo destacado — em 2026 e um numero errado numa
+apuracao informativa, a partir de 2027 e recolhimento a maior.
+
+Resolve tambem a pendencia P5 (NT-004 vs NT-009), lida hoje na fonte oficial
+(gov.br/nfse, NT SE/CGNFS-e 009/2026 v1.0.1 e NT 004): nao ha divergencia nem
+coexistencia. A NT-009 ATUALIZA a NT-004 — mesma estrutura, com vCalcReeRepRes
+renomeado para vCalcAjusteBCIBSCBS e a alternativa vCalcAjusteBCLocImoveis
+acrescentada. Implementada a redacao da NT-009:
+
+  ate 2026:    vBC = vServ - descIncond - ajusteBC - vISSQN - vPIS - vCOFINS
+  2027 a 2032: vBC = vServ - descIncond - ajusteBC - vISSQN
+
+Duas decisoes que a NT NAO toma e que ficam marcadas como NOSSAS: base
+negativa LANCA em vez de grampear em zero, e PIS/COFINS nao-zero a partir de
+2027 LANCA em vez de ser descartado — descartar mudaria a base sem ninguem
+perceber.
+
+A migration guarda cada TERMO da formula, nao so o resultado: a base e o
+numero que o Fisco confere, e so o total nao prova como foi obtido. Os CHECKs
+foram exercitados contra um Postgres 16 real (9 casos: componente negativo,
+ajuste sem tipo, PIS em 2027, base negativa, nota legada sem base).
+
+ibscbs_base_centavos e nullable de proposito: notas anteriores a esta migration
+nao tem base calculada, e preenche-las com o valor bruto repetiria o erro.
+
+PARCIAL: falta ligar ao fluxo de emissao (solicitarEmissao e motor), o que
+depende de database.ts regenerado apos aplicar a migration.
+
+DoD: typecheck OK, lint OK, 224 testes OK, build OK. 9 migrations aplicam
+limpas e a nova e idempotente.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014hSNh7NPQPvQ9pGQuzZT1z
+---
+ src/lib/fiscal/base-calculo.test.ts           | 250 ++++++++++++++++++
+ src/lib/fiscal/ibscbs.ts                      |  13 +-
+ src/lib/fiscal/reforma.ts                     | 176 ++++++++++++
+ ...260806140000_notas_base_calculo_ibscbs.sql | 101 +++++++
+ 4 files changed, 538 insertions(+), 2 deletions(-)
+ create mode 100644 src/lib/fiscal/base-calculo.test.ts
+ create mode 100644 supabase/migrations/20260806140000_notas_base_calculo_ibscbs.sql
+
+diff --git a/src/lib/fiscal/base-calculo.test.ts b/src/lib/fiscal/base-calculo.test.ts
+new file mode 100644
+index 0000000..4605096
+--- /dev/null
++++ b/src/lib/fiscal/base-calculo.test.ts
+@@ -0,0 +1,250 @@
++import { describe, it, expect } from "vitest";
++import {
++  calcularBaseIbsCbs,
++  calcularTributosReforma,
++  ULTIMO_ANO_PIS_COFINS,
++} from "@/lib/fiscal/reforma";
++
++/**
++ * Fórmula da NT SE/CGNFS-e nº 009/2026:
++ *   até 2026:    vBC = vServ − descIncond − ajusteBC − vISSQN − vPIS − vCOFINS
++ *   2027 a 2032: vBC = vServ − descIncond − ajusteBC − vISSQN
++ */
++describe("calcularBaseIbsCbs", () => {
++  const R$1000 = 100_000;
++
++  it("deduz o ISSQN — a regressão que motivou o item B7", () => {
++    // Antes, a base era o valor bruto. R$ 1.000 com ISS de 5% tem base 950,
++    // não 1.000: a diferença é o tributo destacado a maior.
++    const base = calcularBaseIbsCbs({
++      valorServicoCentavos: R$1000,
++      aliquotaIss: 0.05,
++      competencia: "2026-07-18",
++    });
++
++    expect(base.issqnCentavos).toBe(5_000);
++    expect(base.baseCentavos).toBe(95_000);
++    expect(base.baseCentavos).not.toBe(R$1000);
++  });
++
++  it("aplica a fórmula completa até 2026, com PIS e COFINS", () => {
++    const base = calcularBaseIbsCbs({
++      valorServicoCentavos: R$1000,
++      descontoIncondicionadoCentavos: 10_000,
++      ajusteBaseCentavos: 5_000,
++      tipoAjusteBase: "ibscbs",
++      issqnCentavos: 4_250,
++      pisCentavos: 1_650,
++      cofinsCentavos: 7_600,
++      competencia: "2026-12-31",
++    });
++
++    // 100000 − 10000 − 5000 − 4250 − 1650 − 7600
++    expect(base.baseCentavos).toBe(71_500);
++    expect(base.deduzPisCofins).toBe(true);
++  });
++
++  it("a partir de 2027 a fórmula perde PIS e COFINS, mas mantém o ISSQN", () => {
++    const componentes = {
++      valorServicoCentavos: R$1000,
++      descontoIncondicionadoCentavos: 10_000,
++      issqnCentavos: 4_250,
++      competencia: "2027-01-01",
++    };
++    const base = calcularBaseIbsCbs(componentes);
++
++    expect(base.baseCentavos).toBe(85_750); // 100000 − 10000 − 4250
++    expect(base.deduzPisCofins).toBe(false);
++  });
++
++  // Descartar em silêncio mudaria a base sem ninguém perceber. E o erro só
++  // dispara quando alguém de fato reivindica a dedução — sem falso positivo.
++  it("recusa PIS/COFINS não-zero a partir de 2027 em vez de descartar", () => {
++    expect(() =>
++      calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        pisCentavos: 1_650,
++        competencia: "2027-03-10",
++      }),
++    ).toThrow(/não são dedutíveis/i);
++
++    // zero passa: não há dedução sendo reivindicada
++    expect(
++      calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        pisCentavos: 0,
++        cofinsCentavos: 0,
++        competencia: "2027-03-10",
++      }).baseCentavos,
++    ).toBe(R$1000);
++  });
++
++  it(`${ULTIMO_ANO_PIS_COFINS} ainda deduz; o ano seguinte já não`, () => {
++    const comuns = { valorServicoCentavos: R$1000, pisCentavos: 1_000, cofinsCentavos: 0 };
++    expect(
++      calcularBaseIbsCbs({ ...comuns, competencia: `${ULTIMO_ANO_PIS_COFINS}-12-31` })
++        .deduzPisCofins,
++    ).toBe(true);
++    expect(() =>
++      calcularBaseIbsCbs({ ...comuns, competencia: `${ULTIMO_ANO_PIS_COFINS + 1}-01-01` }),
++    ).toThrow();
++  });
++
++  describe("ISSQN", () => {
++    it("deriva de (vServ − descIncond) × alíquota quando não informado", () => {
++      const base = calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        descontoIncondicionadoCentavos: 20_000,
++        aliquotaIss: 0.05,
++        competencia: "2026-07-18",
++      });
++
++      expect(base.issqnDerivado).toBe(true);
++      expect(base.issqnCentavos).toBe(4_000); // 5% de 80.000, não de 100.000
++      expect(base.baseCentavos).toBe(76_000);
++    });
++
++    it("o valor informado prevalece sobre a derivação", () => {
++      const base = calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        aliquotaIss: 0.05,
++        issqnCentavos: 1_234, // base de ISS própria (dedução de materiais, p.ex.)
++        competencia: "2026-07-18",
++      });
++
++      expect(base.issqnDerivado).toBe(false);
++      expect(base.issqnCentavos).toBe(1_234);
++    });
++
++    it("informar zero é diferente de não informar", () => {
++      const base = calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        aliquotaIss: 0.05,
++        issqnCentavos: 0, // ISS não devido (imunidade, isenção)
++        competencia: "2026-07-18",
++      });
++
++      expect(base.issqnDerivado).toBe(false);
++      expect(base.baseCentavos).toBe(R$1000);
++    });
++
++    it("sem alíquota e sem valor, o ISSQN é zero", () => {
++      const base = calcularBaseIbsCbs({ valorServicoCentavos: R$1000, competencia: "2026-07-18" });
++      expect(base.issqnCentavos).toBe(0);
++      expect(base.baseCentavos).toBe(R$1000);
++    });
++
++    it("arredonda para centavo inteiro (regra 15)", () => {
++      const base = calcularBaseIbsCbs({
++        valorServicoCentavos: 33_333,
++        aliquotaIss: 0.0275,
++        competencia: "2026-07-18",
++      });
++      expect(Number.isInteger(base.issqnCentavos)).toBe(true);
++      expect(base.issqnCentavos).toBe(917); // 916,6575 → 917
++      expect(base.baseCentavos).toBe(32_416);
++    });
++  });
++
++  describe("ajuste de base", () => {
++    it("aceita as duas alternativas da NT no mesmo lugar da fórmula", () => {
++      for (const tipoAjusteBase of ["ibscbs", "loc_imoveis"] as const) {
++        const base = calcularBaseIbsCbs({
++          valorServicoCentavos: R$1000,
++          ajusteBaseCentavos: 30_000,
++          tipoAjusteBase,
++          competencia: "2026-07-18",
++        });
++        expect(base.baseCentavos).toBe(70_000);
++        expect(base.tipoAjusteBase).toBe(tipoAjusteBase);
++      }
++    });
++
++    // Sem o tipo, o valor não teria tag onde sair no XML da DPS.
++    it("recusa ajuste sem tipo", () => {
++      expect(() =>
++        calcularBaseIbsCbs({
++          valorServicoCentavos: R$1000,
++          ajusteBaseCentavos: 30_000,
++          competencia: "2026-07-18",
++        }),
++      ).toThrow(/tipoAjusteBase/);
++    });
++
++    it("ajuste zero não exige tipo", () => {
++      expect(
++        calcularBaseIbsCbs({
++          valorServicoCentavos: R$1000,
++          ajusteBaseCentavos: 0,
++          competencia: "2026-07-18",
++        }).tipoAjusteBase,
++      ).toBeNull();
++    });
++  });
++
++  // A NT não fixa piso zero. Grampear em silêncio emitiria nota com base errada
++  // e cara de correta; preferimos recusar e devolver o erro a quem digitou.
++  it("recusa base negativa em vez de grampear em zero", () => {
++    expect(() =>
++      calcularBaseIbsCbs({
++        valorServicoCentavos: 10_000,
++        descontoIncondicionadoCentavos: 9_000,
++        issqnCentavos: 5_000,
++        competencia: "2026-07-18",
++      }),
++    ).toThrow(/negativa/i);
++  });
++
++  it("base exatamente zero é válida", () => {
++    const base = calcularBaseIbsCbs({
++      valorServicoCentavos: 10_000,
++      descontoIncondicionadoCentavos: 10_000,
++      competencia: "2026-07-18",
++    });
++    expect(base.baseCentavos).toBe(0);
++  });
++
++  it("recusa componente fracionário ou negativo (regra 15: centavos inteiros)", () => {
++    expect(() =>
++      calcularBaseIbsCbs({ valorServicoCentavos: 100.5, competencia: "2026-07-18" }),
++    ).toThrow(/inteiro/);
++    expect(() =>
++      calcularBaseIbsCbs({
++        valorServicoCentavos: R$1000,
++        descontoIncondicionadoCentavos: -1,
++        competencia: "2026-07-18",
++      }),
++    ).toThrow(/inteiro/);
++  });
++
++  it("recusa competência inválida", () => {
++    expect(() =>
++      calcularBaseIbsCbs({ valorServicoCentavos: R$1000, competencia: "abcd-01-01" }),
++    ).toThrow(/Competência inválida/);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// O efeito prático: o tributo destacado muda porque a base mudou.
++// ---------------------------------------------------------------------------
++describe("base correta x base bruta — efeito no tributo", () => {
++  it("a base com ISSQN deduzido destaca menos IBS/CBS que a base bruta", () => {
++    const competencia = "2026-07-18";
++    const bruta = calcularTributosReforma({
++      baseCentavos: 100_000,
++      competencia,
++      regime: "padrao",
++    });
++
++    const { baseCentavos } = calcularBaseIbsCbs({
++      valorServicoCentavos: 100_000,
++      aliquotaIss: 0.05,
++      competencia,
++    });
++    const correta = calcularTributosReforma({ baseCentavos, competencia, regime: "padrao" });
++
++    expect(bruta.cbsValorCentavos).toBe(900); // 0,9% de 1.000,00
++    expect(correta.cbsValorCentavos).toBe(855); // 0,9% de 950,00
++    expect(correta.cbsValorCentavos).toBeLessThan(bruta.cbsValorCentavos);
++  });
++});
+diff --git a/src/lib/fiscal/ibscbs.ts b/src/lib/fiscal/ibscbs.ts
+index 0e295a1..63b2a1e 100644
+--- a/src/lib/fiscal/ibscbs.ts
++++ b/src/lib/fiscal/ibscbs.ts
+@@ -410,8 +410,17 @@ export const PENDENCIAS_C5 = [
+     "cruzada (Anexo VIII), não campo livre. Hoje é string opcional no input.",
+   "Confirmar o caminho XML de opSimpNac/regApIBSCBSSN (dentro ou fora do " +
+     "grupo IBSCBS) antes de montar o payload com esses campos.",
+-  "Confirmar se a fórmula de base de cálculo da NT-009 substitui ou coexiste " +
+-    "com a da NT-004.",
++  // RESOLVIDA em 06/08/2026 pela leitura das duas NTs na fonte oficial
++  // (gov.br/nfse). Mantida no array em vez de apagada, para registrar a
++  // resposta — quem ler depois não deve precisar refazer a mesma dúvida.
++  "RESOLVIDA — NT-004 vs NT-009 na base de cálculo: não há divergência nem " +
++    "coexistência a resolver. A NT-009 ATUALIZA a NT-004 (mesma estrutura, com " +
++    "`vCalcReeRepRes` renomeado para `vCalcAjusteBCIBSCBS` e a alternativa " +
++    "`vCalcAjusteBCLocImoveis` acrescentada, para locação de imóveis). " +
++    "Implementada em calcularBaseIbsCbs() na redação da NT-009.",
++  "A fórmula do vBC está implementada e testada, mas NENHUM formulário coleta " +
++    "desconto incondicionado, ajuste de base, PIS e COFINS ainda. Na prática " +
++    "esses termos chegam zerados e só o ISSQN é de fato deduzido.",
+   "As alíquotas de 2027+ NÃO estão fixadas por Resolução do Senado. " +
+     "aliquotasReferencia() agora lança AliquotaNaoFixadaError nesses anos, em " +
+     "vez de devolver o par de teste de 2026 — mas isso significa que a emissão " +
+diff --git a/src/lib/fiscal/reforma.ts b/src/lib/fiscal/reforma.ts
+index 870a238..fb44a70 100644
+--- a/src/lib/fiscal/reforma.ts
++++ b/src/lib/fiscal/reforma.ts
+@@ -174,6 +174,182 @@ export function competenciasComAliquotaFixada(): number[] {
+     .sort();
+ }
+ 
++// ---------------------------------------------------------------------------
++// BASE DE CÁLCULO DO IBS/CBS (item B7 da auditoria pós-C5)
++//
++// Antes, o sistema usava o valor BRUTO do serviço como base. A base da NFS-e
++// não é o valor bruto: é o valor bruto MENOS um conjunto de deduções. Usar o
++// bruto superestima a base e, com ela, o IBS/CBS destacado. Em 2026 a apuração
++// é informativa e o erro é "só" um número errado na nota; a partir de 2027 vira
++// recolhimento a maior.
++//
++// FÓRMULA (Nota Técnica SE/CGNFS-e nº 009/2026, v1.0.1, lida na fonte oficial
++// em 06/08/2026 — gov.br/nfse, documentação técnica RTC):
++//
++//   até 2026:    vBC = vServ − descIncond − ajusteBC − vISSQN − vPIS − vCOFINS
++//   2027 a 2032: vBC = vServ − descIncond − ajusteBC − vISSQN
++//
++// onde `ajusteBC` é `vCalcAjusteBCIBSCBS` OU `vCalcAjusteBCLocImoveis` — a NT
++// usa "ou" porque as duas ocupam o mesmo lugar na fórmula, cada uma para um
++// tipo de operação.
++//
++// RESOLUÇÃO DA PENDÊNCIA P5 (NT-004 vs NT-009): as duas fórmulas NÃO divergem
++// e não há coexistência a resolver. A NT-009 ATUALIZA a NT-004 — mesma
++// estrutura, com `vCalcReeRepRes` renomeado para `vCalcAjusteBCIBSCBS` e o
++// acréscimo da alternativa `vCalcAjusteBCLocImoveis` (locação de bens imóveis,
++// subitem 99.03). A NT-009 diz complementar/ajustar as notas anteriores, sem
++// revogá-las. Por isso implementamos a redação da NT-009, que é a mais recente
++// e engloba a anterior.
++//
++// A dedução do ISSQN é PERMANENTE durante toda a transição; PIS e COFINS só
++// até 2026, quando deixam de existir.
++// ---------------------------------------------------------------------------
++
++/** Último ano em que PIS e COFINS existem e, portanto, são dedutíveis da base. */
++export const ULTIMO_ANO_PIS_COFINS = 2026;
++
++/**
++ * Qual das duas alternativas de ajuste ocupa o lugar na fórmula.
++ * - `ibscbs`      → vCalcAjusteBCIBSCBS (glosa de serviços de saúde, operações de terceiros)
++ * - `loc_imoveis` → vCalcAjusteBCLocImoveis (locação de bens imóveis, subitem 99.03)
++ */
++export const TIPO_AJUSTE_BASE = ["ibscbs", "loc_imoveis"] as const;
++export type TipoAjusteBase = (typeof TIPO_AJUSTE_BASE)[number];
++
++export interface ComponentesBaseIbsCbs {
++  /** vServ — valor bruto do serviço. */
++  valorServicoCentavos: Centavos;
++  /** descIncond — desconto incondicionado (o condicionado NÃO entra). */
++  descontoIncondicionadoCentavos?: Centavos;
++  /** vCalcAjusteBCIBSCBS ou vCalcAjusteBCLocImoveis, conforme `tipoAjusteBase`. */
++  ajusteBaseCentavos?: Centavos;
++  tipoAjusteBase?: TipoAjusteBase | null;
++  /**
++   * vISSQN. Quando omitido, é derivado de `(vServ − descIncond) × aliquotaIss`.
++   * A derivação segue o preço do serviço como base do ISS (LC 116/2003, art. 7º);
++   * quem tiver base de ISS própria — dedução de materiais, por exemplo — informa
++   * o valor e a derivação não acontece.
++   */
++  issqnCentavos?: Centavos;
++  aliquotaIss?: number;
++  /** vPIS e vCOFINS — dedutíveis só até 2026. */
++  pisCentavos?: Centavos;
++  cofinsCentavos?: Centavos;
++}
++
++export interface BaseIbsCbs {
++  baseCentavos: Centavos;
++  /** Memória de cálculo: o que de fato foi subtraído, já resolvido. */
++  valorServicoCentavos: Centavos;
++  descontoIncondicionadoCentavos: Centavos;
++  ajusteBaseCentavos: Centavos;
++  tipoAjusteBase: TipoAjusteBase | null;
++  issqnCentavos: Centavos;
++  /** true quando o ISSQN veio da derivação, não informado por quem chamou. */
++  issqnDerivado: boolean;
++  pisCentavos: Centavos;
++  cofinsCentavos: Centavos;
++  /** false a partir de 2027 — PIS/COFINS não entram mais na fórmula. */
++  deduzPisCofins: boolean;
++}
++
++function exigirCentavos(nome: string, valor: number | undefined): Centavos {
++  const n = valor ?? 0;
++  if (!Number.isInteger(n) || n < 0) {
++    throw new Error(`${nome} deve ser inteiro >= 0 (centavos). Recebido: ${String(valor)}`);
++  }
++  return n;
++}
++
++/**
++ * Calcula o vBC da NFS-e a partir dos componentes da NT-009.
++ *
++ * Duas decisões que a NT NÃO toma e que portanto são NOSSAS, marcadas aqui para
++ * não passarem por norma:
++ *
++ * 1. Base negativa. A NT não estabelece piso zero nem proíbe o valor negativo.
++ *    Preferimos LANÇAR a grampear em zero: deduções maiores que o valor do
++ *    serviço são erro de digitação ou de integração, e zerar em silêncio emitiria
++ *    uma nota com base errada e aparência de correta.
++ * 2. PIS/COFINS a partir de 2027. Um valor NÃO-ZERO nessas competências também
++ *    lança, em vez de ser descartado sem aviso. Descartar mudaria a base sem que
++ *    ninguém percebesse; e o erro só dispara quando alguém realmente reivindica
++ *    a dedução, então não há falso positivo.
++ */
++export function calcularBaseIbsCbs(
++  params: ComponentesBaseIbsCbs & { competencia: string },
++): BaseIbsCbs {
++  const ano = Number(params.competencia.slice(0, 4));
++  if (!Number.isInteger(ano) || ano < 1000) {
++    throw new Error(`Competência inválida: ${params.competencia}`);
++  }
++
++  const valorServicoCentavos = exigirCentavos("valorServicoCentavos", params.valorServicoCentavos);
++  const descontoIncondicionadoCentavos = exigirCentavos(
++    "descontoIncondicionadoCentavos",
++    params.descontoIncondicionadoCentavos,
++  );
++  const ajusteBaseCentavos = exigirCentavos("ajusteBaseCentavos", params.ajusteBaseCentavos);
++  const pisCentavos = exigirCentavos("pisCentavos", params.pisCentavos);
++  const cofinsCentavos = exigirCentavos("cofinsCentavos", params.cofinsCentavos);
++
++  // O tipo do ajuste não é decorativo: ele diz QUAL tag da DPS carrega o valor.
++  // Um ajuste sem tipo sairia no XML sem endereço.
++  const tipoAjusteBase = params.tipoAjusteBase ?? null;
++  if (ajusteBaseCentavos > 0 && tipoAjusteBase === null) {
++    throw new Error(
++      "Ajuste de base informado sem `tipoAjusteBase`. Escolha entre " +
++        `${TIPO_AJUSTE_BASE.join(" e ")} — são tags diferentes da DPS.`,
++    );
++  }
++
++  const deduzPisCofins = ano <= ULTIMO_ANO_PIS_COFINS;
++  if (!deduzPisCofins && (pisCentavos > 0 || cofinsCentavos > 0)) {
++    throw new Error(
++      `PIS/COFINS não são dedutíveis da base de IBS/CBS em ${ano}: os tributos ` +
++        `deixam de existir em ${ULTIMO_ANO_PIS_COFINS + 1} e a fórmula da NT-009 ` +
++        "não os inclui a partir daí. Zere os campos ou revise a competência.",
++    );
++  }
++
++  // ISSQN: informado prevalece; derivado é o caminho de quem só tem alíquota.
++  const issqnDerivado = params.issqnCentavos === undefined || params.issqnCentavos === null;
++  const issqnCentavos = issqnDerivado
++    ? Math.round(
++        Math.max(0, valorServicoCentavos - descontoIncondicionadoCentavos) *
++          (params.aliquotaIss ?? 0),
++      )
++    : exigirCentavos("issqnCentavos", params.issqnCentavos);
++
++  const baseCentavos =
++    valorServicoCentavos -
++    descontoIncondicionadoCentavos -
++    ajusteBaseCentavos -
++    issqnCentavos -
++    (deduzPisCofins ? pisCentavos + cofinsCentavos : 0);
++
++  if (baseCentavos < 0) {
++    throw new Error(
++      `Base de cálculo de IBS/CBS negativa (${baseCentavos} centavos): as deduções ` +
++        `somam mais que o valor do serviço (${valorServicoCentavos}). Revise desconto ` +
++        "incondicionado, ajuste de base, ISSQN, PIS e COFINS.",
++    );
++  }
++
++  return {
++    baseCentavos,
++    valorServicoCentavos,
++    descontoIncondicionadoCentavos,
++    ajusteBaseCentavos,
++    tipoAjusteBase,
++    issqnCentavos,
++    issqnDerivado,
++    pisCentavos,
++    cofinsCentavos,
++    deduzPisCofins,
++  };
++}
++
+ export interface TributosReforma {
+   regime: RegimeIbsCbs;
+   cbsAliquota: number;
+diff --git a/supabase/migrations/20260806140000_notas_base_calculo_ibscbs.sql b/supabase/migrations/20260806140000_notas_base_calculo_ibscbs.sql
+new file mode 100644
+index 0000000..0447ab8
+--- /dev/null
++++ b/supabase/migrations/20260806140000_notas_base_calculo_ibscbs.sql
+@@ -0,0 +1,101 @@
++-- ============================================================================
++-- BASE DE CÁLCULO DO IBS/CBS EM notas_fiscais  (item B7 da auditoria pós-C5)
++--
++-- Até aqui o sistema usava `valor_servico_centavos` — o valor BRUTO — como base
++-- do IBS/CBS. A base da NFS-e não é o bruto: é o bruto menos um conjunto de
++-- deduções. Usar o bruto superestima a base e, com ela, o tributo destacado.
++--
++-- FÓRMULA (Nota Técnica SE/CGNFS-e nº 009/2026, v1.0.1):
++--
++--   até 2026:    vBC = vServ − descIncond − ajusteBC − vISSQN − vPIS − vCOFINS
++--   2027 a 2032: vBC = vServ − descIncond − ajusteBC − vISSQN
++--
++-- `ajusteBC` é `vCalcAjusteBCIBSCBS` OU `vCalcAjusteBCLocImoveis` — as duas
++-- ocupam o mesmo lugar na fórmula, cada uma para um tipo de operação. A NT-009
++-- atualiza a NT-004 (que chamava o campo de `vCalcReeRepRes`), sem revogá-la.
++--
++-- POR QUE GUARDAR OS COMPONENTES, E NÃO SÓ O RESULTADO: a base é o número que
++-- o Fisco confere. Guardar só o total tornaria impossível provar como ele foi
++-- obtido depois que alíquota, fórmula ou dados de entrada mudarem. Cada coluna
++-- aqui é um termo da fórmula.
++--
++-- Espelho em código: `calcularBaseIbsCbs()` em src/lib/fiscal/reforma.ts.
++-- ============================================================================
++
++-- Tipo do ajuste — diz QUAL tag da DPS carrega o valor. Um ajuste sem tipo
++-- sairia no XML sem endereço.
++DO $$
++BEGIN
++  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tipo_ajuste_base_ibscbs') THEN
++    CREATE TYPE tipo_ajuste_base_ibscbs AS ENUM ('ibscbs', 'loc_imoveis');
++  END IF;
++END $$;
++
++COMMENT ON TYPE tipo_ajuste_base_ibscbs IS
++  'ibscbs = vCalcAjusteBCIBSCBS (glosa de saúde, operações de terceiros); '
++  'loc_imoveis = vCalcAjusteBCLocImoveis (locação de bens imóveis, subitem 99.03).';
++
++ALTER TABLE notas_fiscais
++  -- descIncond. O desconto CONDICIONADO não entra na fórmula.
++  ADD COLUMN IF NOT EXISTS desconto_incondicionado_centavos INTEGER NOT NULL DEFAULT 0,
++
++  -- vCalcAjusteBCIBSCBS ou vCalcAjusteBCLocImoveis, conforme o tipo.
++  ADD COLUMN IF NOT EXISTS ajuste_base_centavos INTEGER NOT NULL DEFAULT 0,
++  ADD COLUMN IF NOT EXISTS ajuste_base_tipo     tipo_ajuste_base_ibscbs,
++
++  -- vISSQN. Guardamos o valor EFETIVAMENTE usado, derivado ou informado, para
++  -- que a base seja reproduzível só com o que está gravado nesta linha.
++  ADD COLUMN IF NOT EXISTS issqn_centavos  INTEGER NOT NULL DEFAULT 0,
++
++  -- vPIS e vCOFINS — existem só até 2026.
++  ADD COLUMN IF NOT EXISTS pis_centavos    INTEGER NOT NULL DEFAULT 0,
++  ADD COLUMN IF NOT EXISTS cofins_centavos INTEGER NOT NULL DEFAULT 0,
++
++  -- vBC: o resultado. Nullable porque as notas anteriores a esta migration não
++  -- têm base calculada, e preenchê-las com o valor bruto repetiria justamente o
++  -- erro que estamos corrigindo. NULL aqui significa "nota do modelo antigo".
++  ADD COLUMN IF NOT EXISTS ibscbs_base_centavos INTEGER;
++
++COMMENT ON COLUMN notas_fiscais.ibscbs_base_centavos IS
++  'vBC do IBS/CBS (NT SE/CGNFS-e 009/2026). NULL = nota criada antes da '
++  'implementação da fórmula; NÃO equivale a valor_servico_centavos.';
++
++-- ---------------------------------------------------------------------------
++-- Integridade. Segunda camada: mesmo que a validação em TypeScript falhe por
++-- bug, o insert é recusado aqui (mesmo padrão do grupo IBSCBS).
++-- ---------------------------------------------------------------------------
++
++ALTER TABLE notas_fiscais
++  DROP CONSTRAINT IF EXISTS chk_componentes_bc_nao_negativos,
++  DROP CONSTRAINT IF EXISTS chk_ajuste_base_tem_tipo,
++  DROP CONSTRAINT IF EXISTS chk_pis_cofins_ate_2026,
++  DROP CONSTRAINT IF EXISTS chk_base_ibscbs_nao_negativa;
++
++ALTER TABLE notas_fiscais
++  ADD CONSTRAINT chk_componentes_bc_nao_negativos CHECK (
++    desconto_incondicionado_centavos >= 0
++    AND ajuste_base_centavos >= 0
++    AND issqn_centavos >= 0
++    AND pis_centavos >= 0
++    AND cofins_centavos >= 0
++  ),
++
++  -- Valor sem tipo não tem tag onde sair no XML.
++  ADD CONSTRAINT chk_ajuste_base_tem_tipo CHECK (
++    ajuste_base_centavos = 0 OR ajuste_base_tipo IS NOT NULL
++  ),
++
++  -- PIS/COFINS deixam de existir em 2027. Reivindicar a dedução depois disso é
++  -- erro de dado, não caso de borda. EXTRACT sobre DATE é imutável, então pode
++  -- entrar em CHECK.
++  ADD CONSTRAINT chk_pis_cofins_ate_2026 CHECK (
++    EXTRACT(YEAR FROM competencia) <= 2026
++    OR (pis_centavos = 0 AND cofins_centavos = 0)
++  ),
++
++  -- Deduções maiores que o valor do serviço: preferimos recusar a gravar zero,
++  -- pelo mesmo motivo do código — zerar em silêncio emite nota com base errada
++  -- e aparência de correta.
++  ADD CONSTRAINT chk_base_ibscbs_nao_negativa CHECK (
++    ibscbs_base_centavos IS NULL OR ibscbs_base_centavos >= 0
++  );
+-- 
+2.43.0
+

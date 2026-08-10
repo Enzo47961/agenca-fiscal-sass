@@ -4,6 +4,8 @@ import { inngest } from "@/inngest/client";
 import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
 import { type Database } from "@/types/database";
 import { REGIME_IBSCBS, calcularTributosReforma } from "@/lib/fiscal/reforma";
+import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
+import { carregarCClassTribConhecidos } from "./dominio-fiscal";
 
 /**
  * Ponto de entrada da emissão (regra 5 do CLAUDE.md):
@@ -27,15 +29,46 @@ export const solicitarEmissaoSchema = z.object({
   // Split payment: preenchidos só quando a liquidação retiver CBS/IBS na fonte
   valorLiquidoCentavos: z.number().int().nonnegative().nullish(),
   splitRetidoCentavos: z.number().int().nonnegative().nullish(),
+  /**
+   * Grupo IBSCBS da DPS (CST, cClassTrib e subgrupos condicionais).
+   * Opcional: não há data confirmada de obrigatoriedade de preenchimento do
+   * grupo na NFS-e, então nota sem ele continua válida.
+   */
+  declaracaoIbsCbs: declaracaoIbsCbsSchema.nullish(),
 });
 
-export type SolicitarEmissaoInput = z.infer<typeof solicitarEmissaoSchema>;
+/**
+ * Entrada de `solicitarEmissao` — o tipo de ENTRADA do schema, não o de saída.
+ * A função faz o `parse()` internamente, então quem chama não precisa aplicar
+ * os defaults (`issRetido`, `regimeIbsCbs`) antes: é o schema que aplica.
+ */
+export type SolicitarEmissaoInput = z.input<typeof solicitarEmissaoSchema>;
+
+/** Já validada e com defaults aplicados — o que de fato vai para o banco. */
+export type SolicitarEmissaoValidada = z.output<typeof solicitarEmissaoSchema>;
 
 export async function solicitarEmissao(
   db: SupabaseClient<Database>,
   input: SolicitarEmissaoInput,
 ): Promise<{ notaId: string }> {
   const dados = solicitarEmissaoSchema.parse(input);
+
+  // Grupo IBSCBS: validado AQUI, na criação, e não só na emissão.
+  //
+  // Por que aqui também: se a declaração só fosse conferida pelo provider, uma
+  // nota com enquadramento inválido seria criada, entraria na máquina de
+  // estados e só falharia minutos depois, no motor — com o usuário já fora da
+  // tela. Validando na fronteira (regra 19), o erro volta enquanto ele ainda
+  // está no formulário e nenhuma nota chega a existir.
+  const declaracao = dados.declaracaoIbsCbs ?? null;
+  if (declaracao) {
+    const validacao = validarDeclaracao(declaracao, {
+      cClassTribConhecidos: await carregarCClassTribConhecidos(db),
+    });
+    if (!validacao.valido) {
+      throw new Error(`Grupo IBS/CBS inválido: ${validacao.erros.join("; ")}`);
+    }
+  }
 
   // Destaque de CBS/IBS calculado na criação, a partir do valor, competência e regime.
   const tributos = calcularTributosReforma({
@@ -63,6 +96,16 @@ export async function solicitarEmissao(
       ibs_valor_centavos: tributos.ibsValorCentavos,
       valor_liquido_centavos: dados.valorLiquidoCentavos ?? null,
       split_retido_centavos: dados.splitRetidoCentavos ?? null,
+      // Grupo IBSCBS — os CHECKs e a FK composta do banco são a segunda
+      // camada: mesmo que a validação acima falhe por bug, o insert é recusado.
+      ibscbs_cst: declaracao?.cst ?? null,
+      ibscbs_cclasstrib: declaracao?.cClassTrib ?? null,
+      ibscbs_ccredpres: declaracao?.cCredPres ?? null,
+      ibscbs_trib_reg_cst: declaracao?.tribRegular?.cstRegular ?? null,
+      ibscbs_trib_reg_cclasstrib: declaracao?.tribRegular?.cClassTribRegular ?? null,
+      ibscbs_dif_perc_uf: declaracao?.diferimento?.percentualUf ?? null,
+      ibscbs_dif_perc_mun: declaracao?.diferimento?.percentualMun ?? null,
+      ibscbs_dif_perc_cbs: declaracao?.diferimento?.percentualCbs ?? null,
       status: "pendente",
     })
     .select("id, empresa_id")

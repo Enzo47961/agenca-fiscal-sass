@@ -4,18 +4,27 @@ import { ArrowLeft, Users } from "lucide-react";
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { listarClientes } from "@/services/clientes";
 import { ListaClientes } from "./lista";
+import { Paginacao } from "./paginacao";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Clientes — Agência Fiscal" };
 
-export default async function ClientesPage() {
+export default async function ClientesPage({
+  searchParams,
+}: {
+  searchParams: { pagina?: string; busca?: string };
+}) {
   const db = createSessionClient();
   const estado = await estadoDaSessao(db);
   if (estado.tipo === "deslogado") redirect("/login");
   if (estado.tipo === "sem_empresa") redirect("/onboarding");
 
-  const clientes = await listarClientes(db, { empresaId: estado.empresaId });
+  const pagina = await listarClientes(db, {
+    empresaId: estado.empresaId,
+    pagina: Number(searchParams.pagina) || 1,
+    busca: searchParams.busca,
+  });
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-8">
@@ -39,7 +48,41 @@ export default async function ClientesPage() {
         </div>
       </header>
 
-      <ListaClientes clientes={clientes} />
+      {/*
+        Busca em <form method="get">, sem JavaScript: o termo vira query string,
+        a URL fica compartilhável e a paginação sabe preservá-la. É o que dá ao
+        usuário como achar um cliente que não está na primeira página.
+      */}
+      <form method="get" className="mb-4 flex gap-2">
+        <input
+          type="search"
+          name="busca"
+          defaultValue={searchParams.busca ?? ""}
+          placeholder="Buscar por nome"
+          aria-label="Buscar clientes por nome"
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+        <button
+          type="submit"
+          className="shrink-0 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Buscar
+        </button>
+      </form>
+
+      {searchParams.busca ? (
+        <p className="mb-3 text-sm text-slate-500">
+          {pagina.total} resultado{pagina.total === 1 ? "" : "s"} para{" "}
+          <strong>{searchParams.busca}</strong> ·{" "}
+          <Link href="/dashboard/clientes" className="text-brand-600 hover:underline">
+            limpar
+          </Link>
+        </p>
+      ) : null}
+
+      <ListaClientes clientes={pagina.itens} />
+
+      <Paginacao pagina={pagina} busca={searchParams.busca} />
     </main>
   );
 }

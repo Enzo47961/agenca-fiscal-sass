@@ -9,6 +9,7 @@ import {
   TOTAL_CCLASSTRIB_NFSE,
   aliquotaEfetiva,
   buscarCst,
+  declaracaoDeColunas,
   declaracaoIbsCbsSchema,
   validarDeclaracao,
   type DeclaracaoTributariaIBSCBS,
@@ -226,5 +227,77 @@ describe("pendências do C5", () => {
     expect(PENDENCIAS_C5.length).toBeGreaterThanOrEqual(8);
     expect(PENDENCIAS_C5.join(" ")).toContain("164");
     expect(PENDENCIAS_C5.join(" ")).toContain("contador");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A ponte persistência → emissão. Se ela errar, a declaração fica gravada no
+// banco e some no caminho para a prefeitura, sem erro nenhum.
+// ---------------------------------------------------------------------------
+
+const COLUNAS_VAZIAS = {
+  ibscbs_cst: null,
+  ibscbs_cclasstrib: null,
+  ibscbs_ccredpres: null,
+  ibscbs_trib_reg_cst: null,
+  ibscbs_trib_reg_cclasstrib: null,
+  ibscbs_dif_perc_uf: null,
+  ibscbs_dif_perc_mun: null,
+  ibscbs_dif_perc_cbs: null,
+};
+
+describe("declaracaoDeColunas", () => {
+  it("nota sem grupo IBSCBS devolve null", () => {
+    expect(declaracaoDeColunas(COLUNAS_VAZIAS)).toBeNull();
+  });
+
+  it("reconstrói o par mínimo", () => {
+    expect(
+      declaracaoDeColunas({ ...COLUNAS_VAZIAS, ibscbs_cst: "200", ibscbs_cclasstrib: "200027" }),
+    ).toEqual({
+      cst: "200",
+      cClassTrib: "200027",
+      cCredPres: null,
+      tribRegular: null,
+      diferimento: null,
+    });
+  });
+
+  it("reconstrói gTribRegular e gDif quando presentes", () => {
+    const d = declaracaoDeColunas({
+      ibscbs_cst: "510",
+      ibscbs_cclasstrib: "510001",
+      ibscbs_ccredpres: "07",
+      ibscbs_trib_reg_cst: "000",
+      ibscbs_trib_reg_cclasstrib: "000001",
+      ibscbs_dif_perc_uf: 1,
+      ibscbs_dif_perc_mun: 0.5,
+      ibscbs_dif_perc_cbs: null,
+    });
+    expect(d?.cCredPres).toBe("07");
+    expect(d?.tribRegular).toEqual({ cstRegular: "000", cClassTribRegular: "000001" });
+    expect(d?.diferimento).toEqual({ percentualUf: 1, percentualMun: 0.5, percentualCbs: null });
+  });
+
+  // Zero é um percentual legítimo de diferimento — não pode ser confundido
+  // com "ausente" por um teste de veracidade descuidado.
+  it("percentual de diferimento zero não some", () => {
+    const d = declaracaoDeColunas({
+      ...COLUNAS_VAZIAS,
+      ibscbs_cst: "510",
+      ibscbs_cclasstrib: "510001",
+      ibscbs_dif_perc_cbs: 0,
+    });
+    expect(d?.diferimento).toEqual({ percentualUf: null, percentualMun: null, percentualCbs: 0 });
+  });
+
+  // O que sai daqui tem que passar na própria validação do domínio.
+  it("o que é reconstruído continua válido para validarDeclaracao", () => {
+    const d = declaracaoDeColunas({
+      ...COLUNAS_VAZIAS,
+      ibscbs_cst: "200",
+      ibscbs_cclasstrib: "200027",
+    })!;
+    expect(validarDeclaracao(d).valido).toBe(true);
   });
 });

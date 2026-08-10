@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { ArrowLeft, Building2, ShieldCheck } from "lucide-react";
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { FormularioConfiguracoes } from "./formulario";
+import { providersDisponiveis } from "@/lib/fiscal/providers";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ export default async function ConfiguracoesPage() {
   const { data: empresa } = await db
     .from("empresas")
     .select(
-      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, simples_por_fora",
+      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, simples_por_fora, provider_fiscal",
     )
     .eq("id", sessao.empresaId)
     .single();
@@ -54,6 +55,7 @@ export default async function ConfiguracoesPage() {
       </div>
 
       <FormularioConfiguracoes
+        providers={providersDisponiveis()}
         dadosIniciais={{
           razaoSocial: empresa?.razao_social ?? "",
           nomeFantasia: empresa?.nome_fantasia ?? "",
@@ -64,6 +66,7 @@ export default async function ConfiguracoesPage() {
           emailContato: empresa?.email_contato ?? "",
           cnae: empresa?.cnae ?? "",
           simplesPorFora: empresa?.simples_por_fora ?? false,
+          providerFiscal: empresa?.provider_fiscal ?? "mock",
         }}
       />
     </main>
