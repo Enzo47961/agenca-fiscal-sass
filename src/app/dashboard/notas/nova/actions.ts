@@ -57,6 +57,11 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     issqnCentavos: reaisParaCentavos(formData.get("issqn")),
     pisCentavos: reaisParaCentavos(formData.get("pis")),
     cofinsCentavos: reaisParaCentavos(formData.get("cofins")),
+    // C7: o checkbox vem do formulário, mas QUEM confirmou vem da sessão
+    // (regra 3) — aceitar o autor do cliente permitiria atribuir a
+    // confirmação a outra pessoa.
+    confirmacaoRegimeDiferenciado: formData.get("confirmacaoRegime") === "on",
+    confirmadoPorUserId: estado.userId,
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

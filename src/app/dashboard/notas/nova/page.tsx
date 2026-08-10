@@ -24,6 +24,14 @@ export default async function NovaNotaPage() {
   });
   const clientes = pagina.itens;
 
+  // O regime da empresa decide se o aviso do NBS aparece (A7). Falha aqui não
+  // impede emitir: sem o regime, o formulário só deixa de mostrar um aviso.
+  const { data: empresa } = await db
+    .from("empresas")
+    .select("regime_tributario")
+    .eq("id", estado.empresaId)
+    .single();
+
   return (
     <main className="mx-auto max-w-2xl px-6 py-8">
       <Link
@@ -67,7 +75,10 @@ export default async function NovaNotaPage() {
               .
             </p>
           ) : null}
-          <FormularioEmissao clientes={clientes.map((c) => ({ id: c.id, nome: c.nome }))} />
+          <FormularioEmissao
+            clientes={clientes.map((c) => ({ id: c.id, nome: c.nome }))}
+            regimeTributario={empresa?.regime_tributario ?? null}
+          />
         </>
       )}
     </main>

@@ -2,7 +2,7 @@ import { createCipheriv, randomBytes } from "node:crypto";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { type Database } from "@/types/database";
-import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+import { REGIME_COM_SIMPLES_POR_FORA, REGIMES_TRIBUTARIOS } from "@/lib/fiscal/regimes";
 
 /**
  * Configurações da empresa: dados fiscais do CNPJ + certificado digital A1.
@@ -42,7 +42,10 @@ export const dadosFiscaisSchema = z
     cnpj: z.string().regex(/^\d{14}$/, "CNPJ deve ter 14 dígitos (somente números)"),
     inscricaoMunicipal: z.string().max(30).optional(),
     codigoMunicipioIbge: z.string().regex(/^\d{7}$/, "Código IBGE deve ter 7 dígitos"),
-    regimeTributario: z.enum(["simples_nacional", "lucro_presumido", "lucro_real", "mei"]),
+    // Lista em `lib/fiscal/regimes.ts` pelo mesmo motivo do
+    // REGIME_COM_SIMPLES_POR_FORA: a tela precisa dos mesmos valores e não pode
+    // importar este módulo, que puxa `node:crypto`.
+    regimeTributario: z.enum(REGIMES_TRIBUTARIOS),
     emailContato: z.string().email(),
     // Reforma tributária: CNAE (base do enquadramento) e escolha do Simples
     cnae: z

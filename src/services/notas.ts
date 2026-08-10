@@ -59,7 +59,46 @@ export const solicitarEmissaoSchema = z.object({
    * grupo na NFS-e, então nota sem ele continua válida.
    */
   declaracaoIbsCbs: declaracaoIbsCbsSchema.nullish(),
-});
+  /**
+   * C7 — confirmação de elegibilidade do regime diferenciado.
+   *
+   * `confirmadoPorUserId` NUNCA vem do formulário: a Server Action o preenche a
+   * partir da sessão (regra 3). Um campo desses vindo do cliente permitiria
+   * atribuir a confirmação a outra pessoa, que é o oposto de trilha de
+   * auditoria.
+   */
+  confirmacaoRegimeDiferenciado: z.boolean().default(false),
+  confirmadoPorUserId: z.string().uuid().nullish(),
+})
+  .superRefine((d, ctx) => {
+    // Regime diferenciado sem confirmação é o estado que o C7 existe para
+    // impedir. Isto NÃO valida elegibilidade — validar de verdade exige a
+    // correlação atividade ↔ regime, que é decisão contábil e ainda não
+    // existe. O que se barra aqui é a escolha feita sem que ninguém assuma.
+    if (d.regimeIbsCbs === "padrao") return;
+
+    if (!d.confirmacaoRegimeDiferenciado) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirmacaoRegimeDiferenciado"],
+        message:
+          "Regime diferenciado exige confirmação explícita de que a atividade se " +
+          "enquadra. A partir de 2027 o enquadramento indevido vira recolhimento a menor.",
+      });
+    }
+
+    // Confirmação sem autor não serve de registro — e a coluna do banco recusa
+    // a combinação de qualquer forma (chk_regime_diferenciado_confirmado).
+    if (d.confirmacaoRegimeDiferenciado && !d.confirmadoPorUserId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirmadoPorUserId"],
+        message:
+          "Confirmação de regime diferenciado sem usuário identificado. Isso é bug " +
+          "de quem chamou: o id vem da sessão, nunca do formulário.",
+      });
+    }
+  });
 
 /**
  * Entrada de `solicitarEmissao` — o tipo de ENTRADA do schema, não o de saída.

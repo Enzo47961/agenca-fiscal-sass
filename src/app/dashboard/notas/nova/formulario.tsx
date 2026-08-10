@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CheckCircle2, HelpCircle, Loader2, SendHorizonal } from "lucide-react";
 import { emitirNotaAction, type EmissaoResult } from "./actions";
 import { REGIME_IBSCBS_LABEL, TIPO_AJUSTE_BASE_LABEL } from "@/lib/fiscal/reforma";
+import { REGIMES_NBS_SOB_DUVIDA } from "@/lib/fiscal/regimes";
 
 const inputClasses =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500";
@@ -18,9 +19,20 @@ function Ajuda({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string; nome: string }> }) {
+export function FormularioEmissao({
+  clientes,
+  regimeTributario,
+}: {
+  clientes: Array<{ id: string; nome: string }>;
+  regimeTributario: string | null;
+}) {
   const [enviando, startTransition] = useTransition();
   const [resultado, setResultado] = useState<EmissaoResult | null>(null);
+  // C7: a confirmação só faz sentido — e só é exigida — fora do regime padrão.
+  const [regime, setRegime] = useState<string>("padrao");
+  const regimeDiferenciado = regime !== "padrao";
+
+  const nbsSobDuvida = REGIMES_NBS_SOB_DUVIDA.some((r) => r === regimeTributario);
 
   if (resultado?.ok) {
     return (
@@ -132,11 +144,28 @@ export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string; 
             Nomenclatura Brasileira de Serviços. Opcional hoje e <strong>não substitui</strong> o
             código de serviço da LC 116 — preencha os dois quando tiver o NBS.
           </Ajuda>
+          {/*
+            A7. O NBS segue OPCIONAL para todos os regimes — as fontes divergem
+            sobre a exigência no lucro presumido/real, e bloquear o envio com
+            base em fonte não confirmada impediria alguém de faturar. O aviso
+            informa sem impedir; se a norma se confirmar, vira validação.
+          */}
+          {nbsSobDuvida ? (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              No seu regime, há indicação de que o NBS venha a ser exigido — as fontes ainda
+              divergem e não estamos bloqueando. Se você já tem o código, preencha.
+            </p>
+          ) : null}
         </label>
 
         <label className="block">
           <span className="mb-1 block text-sm text-slate-600">Regime IBS/CBS</span>
-          <select name="regimeIbsCbs" defaultValue="padrao" className={inputClasses}>
+          <select
+            name="regimeIbsCbs"
+            value={regime}
+            onChange={(e) => setRegime(e.target.value)}
+            className={inputClasses}
+          >
             {Object.entries(REGIME_IBSCBS_LABEL).map(([valor, rotulo]) => (
               <option key={valor} value={valor}>
                 {rotulo}
@@ -145,6 +174,38 @@ export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string; 
           </select>
           <Ajuda>CBS/IBS são calculados automaticamente conforme o regime e a competência.</Ajuda>
         </label>
+
+        {/*
+          C7. Regime diferenciado era escolha livre: qualquer operador marcava
+          "redução de 60%" em qualquer nota, sem vínculo com a atividade. Isto
+          NÃO valida elegibilidade — validar exige a correlação atividade ↔
+          regime, que é decisão contábil e ainda não existe. O que faz é tirar o
+          "cliquei sem ver" e registrar quem confirmou, na própria nota.
+
+          `required` no checkbox: o navegador barra antes do envio, e o schema
+          barra de novo no servidor — a UI não é a validação.
+        */}
+        {regimeDiferenciado ? (
+          <div className="sm:col-span-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                name="confirmacaoRegime"
+                required
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-amber-400"
+              />
+              <span className="text-sm text-amber-900">
+                Confirmo que esta atividade se enquadra em{" "}
+                <strong>{REGIME_IBSCBS_LABEL[regime as keyof typeof REGIME_IBSCBS_LABEL]}</strong>.
+                <span className="mt-1 block text-xs text-amber-800">
+                  A confirmação fica registrada nesta nota com seu usuário e a data. Em caso de
+                  dúvida sobre o enquadramento, consulte seu contador antes de emitir — a partir de
+                  2027 o enquadramento indevido vira recolhimento a menor.
+                </span>
+              </span>
+            </label>
+          </div>
+        ) : null}
 
         {/*
           Deduções da base (NT-009). Recolhidas num <details> porque a nota

@@ -68,6 +68,53 @@ describe("solicitarEmissaoSchema — grupo IBSCBS", () => {
 });
 
 // ---------------------------------------------------------------------------
+// C7 — regime diferenciado exige confirmação explícita.
+//
+// Não valida ELEGIBILIDADE (isso exige a correlação atividade ↔ regime, que é
+// decisão contábil e não existe ainda). Valida que alguém assumiu a escolha.
+// ---------------------------------------------------------------------------
+
+describe("solicitarEmissaoSchema — confirmação de regime diferenciado (C7)", () => {
+  const usuario = "55555555-5555-5555-5555-555555555555";
+
+  it("regime padrão não exige confirmação nenhuma", () => {
+    expect(() => solicitarEmissaoSchema.parse(base)).not.toThrow();
+  });
+
+  it("recusa regime diferenciado sem confirmação", () => {
+    expect(() =>
+      solicitarEmissaoSchema.parse({ ...base, regimeIbsCbs: "reducao_60" }),
+    ).toThrow(/confirmação explícita/i);
+  });
+
+  it("aceita regime diferenciado com confirmação e autor", () => {
+    const r = solicitarEmissaoSchema.parse({
+      ...base,
+      regimeIbsCbs: "reducao_60",
+      confirmacaoRegimeDiferenciado: true,
+      confirmadoPorUserId: usuario,
+    });
+    expect(r.confirmadoPorUserId).toBe(usuario);
+  });
+
+  it("recusa confirmação sem autor — registro sem quem confirmou não é registro", () => {
+    expect(() =>
+      solicitarEmissaoSchema.parse({
+        ...base,
+        regimeIbsCbs: "reducao_30",
+        confirmacaoRegimeDiferenciado: true,
+      }),
+    ).toThrow(/usuário identificado/i);
+  });
+
+  it("exige confirmação em TODOS os regimes fora do padrão", () => {
+    for (const regime of ["reducao_30", "reducao_60", "aliquota_zero", "especifico"]) {
+      expect(() => solicitarEmissaoSchema.parse({ ...base, regimeIbsCbs: regime })).toThrow();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B7 — base de cálculo LIGADA ao fluxo de criação da nota.
 //
 // Os testes abaixo olham o PAYLOAD do insert, não o retorno: o retorno é só o
