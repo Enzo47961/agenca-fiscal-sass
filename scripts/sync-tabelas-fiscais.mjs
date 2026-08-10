@@ -250,18 +250,37 @@ function imprimir(diff, meta) {
     console.log(`\nALTERADOS (${n(diff.alterados)})`);
     for (const r of diff.alterados) {
       for (const c of r.campos) {
-        const de = String(c.de ?? "—").slice(0, 60);
-        const para = String(c.para ?? "—").slice(0, 60);
-        console.log(`  ~ ${r.codigo}  ${c.campo}: ${de} -> ${para}`);
+        console.log(`  ~ ${r.codigo}  ${c.campo}`);
+        for (const [rotulo, valor] of [
+          ["de  ", c.de],
+          ["para", c.para],
+        ]) {
+          // Texto longo vai em linha própria e INTEIRO. Truncar os dois lados
+          // em 60 caracteres escondia justamente a mudança quando ela estava
+          // depois disso — numa ferramenta cujo trabalho é mostrar mudanças.
+          console.log(`      ${rotulo}: ${valor ?? "—"}`);
+        }
       }
     }
   }
   if (n(diff.removidos)) {
-    console.log(`\nAUSENTES NA FONTE (${n(diff.removidos)})`);
+    console.log(`\nAUSENTES NA FONTE (${n(diff.removidos)}) — informativo, não conta como pendência`);
     console.log("  NÃO são apagados: código já declarado em nota emitida precisa continuar");
     console.log("  resolvível. Confira manualmente se a fonte realmente os retirou.");
     for (const c of diff.removidos) console.log(`  ? ${c}`);
   }
+}
+
+/**
+ * Diferenças que uma execução com `--apply` de fato resolve.
+ *
+ * Ausentes ficam DE FORA: eles nunca são apagados, então contá-los deixaria o
+ * código de saída travado em 10 para sempre depois que a fonte retirasse
+ * qualquer registro — e um portão de CI preso em vermelho é um portão que
+ * ninguém mais lê.
+ */
+function pendencias(diff) {
+  return diff.novos.length + diff.alterados.length + diff.vigenciaMudou.length;
 }
 
 async function main() {
@@ -304,14 +323,10 @@ async function main() {
   if (error) throw new Error(`Falha ao ler cclasstrib_ibscbs: ${error.message}`);
 
   const diff = diffLogico(atuais ?? [], novas);
-  const total =
-    diff.novos.length +
-    diff.alterados.length +
-    diff.vigenciaMudou.length +
-    diff.removidos.length;
+  const total = pendencias(diff);
 
   if (opt.json) {
-    console.log(JSON.stringify({ meta, diff }, null, 2));
+    console.log(JSON.stringify({ meta, diff, pendencias: total }, null, 2));
   } else {
     imprimir(diff, meta);
   }
