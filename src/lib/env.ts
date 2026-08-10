@@ -46,6 +46,16 @@ const serverEnvSchema = z.object({
    * sempre reconsulta a API da Focus com o nosso token antes de gravar nada.
    */
   FOCUSNFE_WEBHOOK_TOKEN: z.string().min(16).optional(),
+  /**
+   * Chaves do Inngest. Opcionais no schema porque o Dev Server local não usa
+   * nenhuma das duas — a obrigatoriedade em produção é cobrada em
+   * `inngestEnv()`, abaixo, seguindo o mesmo padrão de `focusNfeEnv()`.
+   *
+   * INNGEST_SIGNING_KEY autentica as requisições que CHEGAM em /api/inngest.
+   * INNGEST_EVENT_KEY autentica os eventos que SAEM daqui para o Inngest Cloud.
+   */
+  INNGEST_SIGNING_KEY: z.string().min(1).optional(),
+  INNGEST_EVENT_KEY: z.string().min(1).optional(),
 });
 
 const publicEnvSchema = z.object({
@@ -94,6 +104,62 @@ export function focusNfeEnv(): {
     );
   }
   return { token: env.FOCUSNFE_TOKEN, ambiente: env.FOCUSNFE_AMBIENTE };
+}
+
+/**
+ * Política de chaves do Inngest (item M4).
+ *
+ * O QUE ESTAVA ERRADO: `INNGEST_SIGNING_KEY` não existia em lugar nenhum — nem
+ * no schema, nem no .env.example, nem no `serve()`. E `/api/inngest` não é um
+ * endpoint qualquer: é ele que EXECUTA as funções, incluindo a máquina de
+ * estados da emissão.
+ *
+ * O SDK (v3) infere o "modo" a partir de sinais da plataforma (VERCEL_ENV,
+ * NODE_ENV=production, Netlify, Render...). Isso produz dois desfechos ruins,
+ * e qual deles acontece depende de ONDE o deploy roda:
+ *
+ * - Modo cloud sem a chave → `validateSignature` lança "No signing key found"
+ *   e TODA execução falha. Ruim, mas barulhento.
+ * - Modo dev inferido (container simples, Docker, VM própria — sem os sinais
+ *   que o SDK reconhece) → a validação de assinatura é PULADA por completo
+ *   (`if (this._mode && !this._mode.isCloud) return { success: true }`).
+ *   Aí /api/inngest aceita POST de qualquer origem e dispara funções. Este é o
+ *   desfecho silencioso, e é o que esta função existe para impedir.
+ *
+ * Por isso a verificação é explícita e nossa, em vez de delegada à inferência:
+ * em produção, sem chave, o endpoint recusa a servir.
+ */
+export function inngestEnv(): { signingKey?: string; eventKey?: string } {
+  const env = serverEnv();
+  return { signingKey: env.INNGEST_SIGNING_KEY, eventKey: env.INNGEST_EVENT_KEY };
+}
+
+/**
+ * Decide se é seguro servir /api/inngest. Pura e separada de `inngestEnv()`
+ * para ser testável sem mexer em process.env.
+ *
+ * Lança em vez de devolver `false`: um endpoint que executa a máquina de
+ * estados não deve ficar de pé "degradado". Em desenvolvimento, a ausência das
+ * chaves é o estado normal (Dev Server) e passa sem ruído.
+ */
+export function verificarChavesInngest(params: {
+  signingKey?: string;
+  eventKey?: string;
+  ehProducao: boolean;
+}): void {
+  if (!params.ehProducao) return;
+
+  const faltando: string[] = [];
+  if (!params.signingKey) faltando.push("INNGEST_SIGNING_KEY");
+  if (!params.eventKey) faltando.push("INNGEST_EVENT_KEY");
+  if (faltando.length === 0) return;
+
+  throw new Error(
+    `${faltando.join(" e ")} ausente(s) em produção. Sem a signing key, o SDK ou ` +
+      "recusa toda execução ou — se inferir modo de desenvolvimento — PULA a " +
+      "verificação de assinatura, deixando /api/inngest aberto para qualquer um " +
+      "disparar as funções. Chaves em https://app.inngest.com/secrets",
+  );
 }
 
 /** Seguro em qualquer lugar — apenas valores públicos. */

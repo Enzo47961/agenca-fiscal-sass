@@ -205,9 +205,9 @@ export default function LandingPage() {
               </div>
               <h3 className="text-lg font-semibold">Onboarding Fiscal Guiado</h3>
               <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                Validação automática de códigos de serviço (LC 116), CST e dos novos campos IBS/CBS
-                do Emissor Nacional. Certificado A1 criptografado de ponta a ponta e ajuda
-                contextual em cada campo — impossível errar o preenchimento.
+                Conferência do formato do código de serviço (LC 116) e do CST/cClassTrib contra a
+                tabela oficial do IBS/CBS antes de enviar. Certificado A1 criptografado em repouso
+                e ajuda contextual em cada campo.
               </p>
             </article>
 

@@ -121,7 +121,17 @@ export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string; 
         <label className="block">
           <span className="mb-1 block text-sm text-slate-600">Código NBS</span>
           <input name="codigoNbs" placeholder="Opcional por enquanto" className={inputClasses} />
-          <Ajuda>Nomenclatura Brasileira de Serviços — substitui o código municipal na reforma.</Ajuda>
+          {/*
+            O texto anterior afirmava que o NBS "substitui o código municipal na
+            reforma". Não é o que a pesquisa sustenta: o papel do NBS ainda é
+            pendência aberta (P3 em PENDENCIAS_C5 — o Anexo VIII, de correlação,
+            não pôde ser lido). Prometer substituição levaria o usuário a parar
+            de preencher o código de serviço, que continua obrigatório.
+          */}
+          <Ajuda>
+            Nomenclatura Brasileira de Serviços. Opcional hoje e <strong>não substitui</strong> o
+            código de serviço da LC 116 — preencha os dois quando tiver o NBS.
+          </Ajuda>
         </label>
 
         <label className="block">

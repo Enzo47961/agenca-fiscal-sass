@@ -175,6 +175,30 @@ function cifrar(dados: Buffer, chaveBase64: string): Cifrado {
   return { blob: Buffer.concat([iv, authTag, ciphertext]).toString("base64") };
 }
 
+/**
+ * Checagem de magic bytes do .pfx (item M1).
+ *
+ * Um PKCS#12 é uma estrutura DER: começa com 0x30 (SEQUENCE) seguido de um byte
+ * de comprimento em forma longa (0x81/0x82/0x83 — um certificado real tem
+ * sempre mais de 255 bytes, então nunca é forma curta).
+ *
+ * O QUE ISTO PEGA: .pem, .cer, .crt, PDF, imagem, ZIP, ou qualquer arquivo
+ * renomeado para .pfx. Sem a checagem, o arquivo é criptografado e guardado sem
+ * reclamação, e a falha só aparece muito depois — dentro do motor, na hora de
+ * assinar, como erro opaco, com o usuário longe da tela de configurações.
+ *
+ * O QUE ISTO **NÃO** FAZ: não valida o certificado, não confere a senha, não
+ * checa validade nem cadeia. Isso exigiria parse de ASN.1 (node-forge/openssl) e
+ * fica para quando houver o fluxo de assinatura. Aqui é rejeição barata e
+ * imediata do que é obviamente não-PFX — não é atestado de que o arquivo presta.
+ */
+export function pareceArquivoPfx(buffer: Buffer): boolean {
+  if (buffer.length < 4) return false;
+  if (buffer[0] !== 0x30) return false;
+  const comprimento = buffer[1];
+  return comprimento === 0x81 || comprimento === 0x82 || comprimento === 0x83;
+}
+
 export async function salvarCertificadoA1(
   db: SupabaseClient<Database>,
   params: {
@@ -186,6 +210,13 @@ export async function salvarCertificadoA1(
 ): Promise<void> {
   if (params.arquivoPfx.length === 0 || params.arquivoPfx.length > 512 * 1024) {
     throw new Error("Arquivo .pfx inválido (vazio ou maior que 512 KB).");
+  }
+  if (!pareceArquivoPfx(params.arquivoPfx)) {
+    throw new Error(
+      "O arquivo enviado não parece um certificado A1 (.pfx/.p12). Certificados em " +
+        ".pem, .cer ou .crt não servem: o A1 precisa conter a chave privada. " +
+        "Baixe o arquivo .pfx original entregue pela sua certificadora.",
+    );
   }
   if (params.senhaPfx.length < 1) {
     throw new Error("Senha do certificado é obrigatória.");

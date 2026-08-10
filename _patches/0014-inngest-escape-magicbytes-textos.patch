@@ -1,0 +1,732 @@
+From 379f8964d8263712c9cfe6da1057fd25877c94a8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 6 Aug 2026 21:16:11 +0000
+Subject: [PATCH] fix(seguranca): chaves do Inngest, escape de HTML no e-mail,
+ magic bytes do A1 e textos enganosos
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+M4 — INNGEST_SIGNING_KEY e INNGEST_EVENT_KEY nao existiam em lugar nenhum:
+nem no schema de env, nem no .env.example, nem no serve(). E /api/inngest nao
+e um endpoint qualquer — e ele que EXECUTA as funcoes, inclusive a maquina de
+estados da emissao. Lendo o SDK (v3.54) para nao chutar: o modo e INFERIDO de
+sinais de plataforma, e em `validateSignature` ha
+`if (this._mode && !this._mode.isCloud) return { success: true }`. Ou seja,
+num deploy sem esses sinais (container simples, VM propria) a verificacao de
+assinatura e PULADA por completo e qualquer POST dispara funcao. Agora a
+checagem e nossa e explicita, e em producao sem chave o endpoint recusa.
+
+A verificacao ficou PREGUICOSA por necessidade: no topo do modulo ela quebrou
+o `npm run build` em "Failed to collect page data", porque o Next importa o
+route handler durante o build, quando NODE_ENV ja e production mas as
+variaveis de runtime nao estao presentes. Adiada para a primeira requisicao,
+ela passa a valer sobre o ambiente de EXECUCAO — que e o que interessa.
+
+M3 — escape de HTML no template de e-mail. nomeCliente e nomeEmpresa vem do
+banco, preenchidos por usuario, e o e-mail vai para um TERCEIRO: o cliente do
+nosso cliente. Sem escape, um tenant envia HTML arbitrario com o NOSSO
+remetente. `href` ganhou tratamento a parte — escapar nao pega
+`javascript:`, entao a checagem la e de esquema, e URL recusada OMITE o botao
+em vez de renderizar link quebrado. O assunto segue sem entidades: e texto
+puro no cliente de e-mail.
+
+M1 — magic bytes do .pfx. Um PKCS#12 e DER: 0x30 seguido de comprimento em
+forma longa. Pega .pem, .cer, PDF ou ZIP renomeado. NAO valida o certificado
+nem a senha, e o comentario diz isso — e rejeicao barata, nao atestado.
+
+A11 — dois textos que prometiam o que o sistema nao faz: "impossivel errar o
+preenchimento" na landing, e a afirmacao de que o NBS "substitui o codigo
+municipal na reforma" (o papel do NBS e pendencia aberta, P3; o texto levaria
+o usuario a parar de preencher o codigo da LC 116, que segue obrigatorio).
+
+DoD: typecheck OK, lint OK, 250 testes OK, build OK.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014hSNh7NPQPvQ9pGQuzZT1z
+---
+ .env.example                                |   9 ++
+ src/app/api/inngest/route.ts                |  61 ++++++++++-
+ src/app/dashboard/notas/nova/formulario.tsx |  12 ++-
+ src/app/page.tsx                            |   6 +-
+ src/inngest/client.ts                       |   7 ++
+ src/lib/email/resend.test.ts                | 106 +++++++++++++++++++-
+ src/lib/email/resend.ts                     |  66 ++++++++++--
+ src/lib/env.test.ts                         |  58 +++++++++++
+ src/lib/env.ts                              |  66 ++++++++++++
+ src/services/empresas.test.ts               |  94 +++++++++++++++++
+ src/services/empresas.ts                    |  31 ++++++
+ 11 files changed, 501 insertions(+), 15 deletions(-)
+ create mode 100644 src/lib/env.test.ts
+
+diff --git a/.env.example b/.env.example
+index 8654f17..1db2657 100644
+--- a/.env.example
++++ b/.env.example
+@@ -65,3 +65,12 @@ FOCUSNFE_AMBIENTE=homologacao
+ # x-focusnfe-token (mín. 16 chars). A rota reconsulta a API da Focus de
+ # qualquer forma antes de gravar, então isso é defesa adicional, não a única.
+ FOCUSNFE_WEBHOOK_TOKEN=
++
++# --- INNGEST (motor de retry) ---
++# OBRIGATÓRIAS EM PRODUÇÃO. Sem elas, /api/inngest — que é quem EXECUTA as
++# funções, incluindo a máquina de estados da emissão — ou recusa toda execução,
++# ou, se o SDK inferir modo de desenvolvimento, PULA a verificação de assinatura
++# e aceita POST de qualquer origem. Em dev local (Inngest Dev Server) não são
++# usadas. Chaves em: https://app.inngest.com/secrets
++INNGEST_SIGNING_KEY=
++INNGEST_EVENT_KEY=
+diff --git a/src/app/api/inngest/route.ts b/src/app/api/inngest/route.ts
+index 4dc81d9..e1b79df 100644
+--- a/src/app/api/inngest/route.ts
++++ b/src/app/api/inngest/route.ts
+@@ -1,13 +1,66 @@
+ import { serve } from "inngest/next";
++import { type NextRequest } from "next/server";
+ import { inngest } from "@/inngest/client";
+ import { emitirNfse } from "@/inngest/functions/emitir-nfse";
+ import { cobrarExcedentes } from "@/inngest/functions/cobrar-excedentes";
++import { inngestEnv, verificarChavesInngest } from "@/lib/env";
+ 
+ /**
+  * Endpoint único do Inngest (App Router).
+  * Toda função nova DEVE ser registrada no array abaixo.
++ *
++ * Este endpoint EXECUTA as funções — inclusive a máquina de estados da emissão.
++ * A signing key é o que separa "o Inngest pediu" de "alguém pediu"; ver
++ * `verificarChavesInngest` em lib/env.ts para o porquê de não confiarmos na
++ * inferência de modo do SDK.
+  */
+-export const { GET, POST, PUT } = serve({
+-  client: inngest,
+-  functions: [emitirNfse, cobrarExcedentes],
+-});
++
++/**
++ * A verificação e o `serve()` são PREGUIÇOSOS de propósito.
++ *
++ * Na primeira tentativa isto rodava no topo do módulo, e o `npm run build`
++ * quebrou em "Failed to collect page data for /api/inngest": o Next importa o
++ * route handler durante o build para coletar metadados, e nesse momento
++ * NODE_ENV já é "production" enquanto as variáveis de ambiente do runtime não
++ * estão necessariamente presentes. Ou seja, a checagem certa no lugar errado
++ * transformava ausência de chave em build quebrado, e não em endpoint recusado.
++ *
++ * Adiando para a primeira requisição, a verificação passa a valer sobre o
++ * ambiente de EXECUÇÃO, que é o que interessa. O cache evita repetir o parse do
++ * schema a cada chamada.
++ */
++let handlerCache: ReturnType<typeof serve> | null = null;
++
++function obterHandler() {
++  if (handlerCache) return handlerCache;
++
++  const { signingKey, eventKey } = inngestEnv();
++  verificarChavesInngest({
++    signingKey,
++    eventKey,
++    ehProducao: process.env.NODE_ENV === "production",
++  });
++
++  handlerCache = serve({
++    client: inngest,
++    functions: [emitirNfse, cobrarExcedentes],
++    // Explícito em vez de deixar o SDK ler do process.env: assim a origem da
++    // chave é rastreável e passa pela validação do schema de ambiente (regra 4).
++    signingKey,
++  });
++  return handlerCache;
++}
++
++// O segundo parâmetro (`res`) existe na assinatura do SDK por herança do
++// Pages Router e é ignorado no App Router — daí o `undefined`.
++export function GET(req: NextRequest) {
++  return obterHandler().GET(req, undefined);
++}
++
++export function POST(req: NextRequest) {
++  return obterHandler().POST(req, undefined);
++}
++
++export function PUT(req: NextRequest) {
++  return obterHandler().PUT(req, undefined);
++}
+diff --git a/src/app/dashboard/notas/nova/formulario.tsx b/src/app/dashboard/notas/nova/formulario.tsx
+index 223f6e6..b39254e 100644
+--- a/src/app/dashboard/notas/nova/formulario.tsx
++++ b/src/app/dashboard/notas/nova/formulario.tsx
+@@ -121,7 +121,17 @@ export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string;
+         <label className="block">
+           <span className="mb-1 block text-sm text-slate-600">Código NBS</span>
+           <input name="codigoNbs" placeholder="Opcional por enquanto" className={inputClasses} />
+-          <Ajuda>Nomenclatura Brasileira de Serviços — substitui o código municipal na reforma.</Ajuda>
++          {/*
++            O texto anterior afirmava que o NBS "substitui o código municipal na
++            reforma". Não é o que a pesquisa sustenta: o papel do NBS ainda é
++            pendência aberta (P3 em PENDENCIAS_C5 — o Anexo VIII, de correlação,
++            não pôde ser lido). Prometer substituição levaria o usuário a parar
++            de preencher o código de serviço, que continua obrigatório.
++          */}
++          <Ajuda>
++            Nomenclatura Brasileira de Serviços. Opcional hoje e <strong>não substitui</strong> o
++            código de serviço da LC 116 — preencha os dois quando tiver o NBS.
++          </Ajuda>
+         </label>
+ 
+         <label className="block">
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index 4c5d96a..4525794 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -205,9 +205,9 @@ export default function LandingPage() {
+               </div>
+               <h3 className="text-lg font-semibold">Onboarding Fiscal Guiado</h3>
+               <p className="mt-2 text-sm leading-relaxed text-slate-400">
+-                Validação automática de códigos de serviço (LC 116), CST e dos novos campos IBS/CBS
+-                do Emissor Nacional. Certificado A1 criptografado de ponta a ponta e ajuda
+-                contextual em cada campo — impossível errar o preenchimento.
++                Conferência do formato do código de serviço (LC 116) e do CST/cClassTrib contra a
++                tabela oficial do IBS/CBS antes de enviar. Certificado A1 criptografado em repouso
++                e ajuda contextual em cada campo.
+               </p>
+             </article>
+ 
+diff --git a/src/inngest/client.ts b/src/inngest/client.ts
+index 25393cc..e0448c7 100644
+--- a/src/inngest/client.ts
++++ b/src/inngest/client.ts
+@@ -4,6 +4,13 @@ import { type Events } from "./events";
+ /**
+  * Instância única do cliente Inngest (regra 11 do CLAUDE.md).
+  * Todos os eventos são tipados via src/inngest/events.ts.
++ *
++ * `INNGEST_EVENT_KEY` fica com a leitura implícita do SDK de propósito. Passá-la
++ * daqui exigiria chamar `serverEnv()` no topo deste módulo — e ele é importado
++ * por `services/notas.ts`, ou seja, por toda Server Action que cria nota. Uma
++ * variável de ambiente faltando viraria erro no caminho da emissão, longe da
++ * causa. A presença da chave é cobrada em `verificarChavesInngest()`, no route
++ * handler, onde o custo é de boot e a mensagem aponta para o lugar certo.
+  */
+ export const inngest = new Inngest({
+   id: "agencia-fiscal-saas",
+diff --git a/src/lib/email/resend.test.ts b/src/lib/email/resend.test.ts
+index a940478..31bb04a 100644
+--- a/src/lib/email/resend.test.ts
++++ b/src/lib/email/resend.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from "vitest";
+-import { emailNotaEmitida } from "@/lib/email/resend";
++import { emailNotaEmitida, escaparHtml, urlSegura } from "@/lib/email/resend";
+ 
+ describe("emailNotaEmitida", () => {
+   it("monta assunto e corpo com os dados da nota", () => {
+@@ -36,3 +36,107 @@ describe("emailNotaEmitida", () => {
+     expect(html).not.toContain("Baixar nota fiscal");
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// Escape de HTML no template (item M3)
++//
++// Nome do cliente e razão social vêm do banco, preenchidos por usuário, e o
++// e-mail vai para um TERCEIRO — o cliente do nosso cliente. Sem escape, um
++// tenant envia HTML arbitrário com o NOSSO remetente.
++// ---------------------------------------------------------------------------
++
++describe("escaparHtml", () => {
++  it("escapa os cinco caracteres que mudam o significado do HTML", () => {
++    expect(escaparHtml(`& < > " '`)).toBe("&amp; &lt; &gt; &quot; &#39;");
++  });
++
++  it("escapa o & primeiro, sem duplicar entidades", () => {
++    expect(escaparHtml("<a>")).toBe("&lt;a&gt;");
++    expect(escaparHtml("&amp;")).toBe("&amp;amp;");
++  });
++
++  it("não mexe em texto comum, inclusive acentos", () => {
++    expect(escaparHtml("Serviços de consultoria — São Paulo")).toBe(
++      "Serviços de consultoria — São Paulo",
++    );
++  });
++});
++
++describe("urlSegura", () => {
++  it("aceita http e https", () => {
++    expect(urlSegura("https://api.exemplo.com/nota.pdf")).toBe("https://api.exemplo.com/nota.pdf");
++    expect(urlSegura("http://api.exemplo.com/nota.pdf")).toBe("http://api.exemplo.com/nota.pdf");
++  });
++
++  // Escapar não resolveria: `javascript:` não tem nenhum caractere que o escape
++  // de HTML trate. Por isso a checagem é de esquema.
++  it("recusa esquemas executáveis", () => {
++    expect(urlSegura("javascript:alert(1)")).toBeNull();
++    expect(urlSegura("data:text/html,<script>alert(1)</script>")).toBeNull();
++    expect(urlSegura("vbscript:msgbox(1)")).toBeNull();
++  });
++
++  it("recusa vazio, nulo e URL malformada", () => {
++    expect(urlSegura(null)).toBeNull();
++    expect(urlSegura(undefined)).toBeNull();
++    expect(urlSegura("")).toBeNull();
++    expect(urlSegura("/relativa/nota.pdf")).toBeNull();
++    expect(urlSegura("nem url")).toBeNull();
++  });
++
++  it("escapa aspas na URL, que fechariam o atributo href", () => {
++    const saida = urlSegura('https://exemplo.com/a"onmouseover="alert(1)');
++    expect(saida).not.toBeNull();
++    expect(saida).not.toContain('"');
++  });
++});
++
++describe("emailNotaEmitida", () => {
++  const base = {
++    nomeCliente: "Cliente",
++    nomeEmpresa: "Empresa",
++    numeroNfse: "123",
++    urlPdf: null,
++  };
++
++  it("escapa o nome do cliente no corpo", () => {
++    const { html } = emailNotaEmitida({
++      ...base,
++      nomeCliente: '<img src=x onerror="alert(1)">',
++    });
++
++    expect(html).not.toContain("<img");
++    expect(html).toContain("&lt;img");
++  });
++
++  it("escapa a razão social nas duas ocorrências", () => {
++    const { html } = emailNotaEmitida({ ...base, nomeEmpresa: "Silva & Souza <b>ME</b>" });
++
++    expect(html).not.toContain("<b>");
++    expect(html.match(/Silva &amp; Souza/g)).toHaveLength(2);
++  });
++
++  it("escapa o número da nota", () => {
++    const { html } = emailNotaEmitida({ ...base, numeroNfse: "1</strong><script>x</script>" });
++    expect(html).not.toContain("<script>");
++  });
++
++  it("renderiza o botão para URL http(s)", () => {
++    const { html } = emailNotaEmitida({ ...base, urlPdf: "https://cdn.exemplo.com/n.pdf" });
++    expect(html).toContain('href="https://cdn.exemplo.com/n.pdf"');
++  });
++
++  it("OMITE o botão quando a URL é perigosa, em vez de renderizar link quebrado", () => {
++    const { html } = emailNotaEmitida({ ...base, urlPdf: "javascript:alert(1)" });
++    expect(html).not.toContain("javascript:");
++    expect(html).not.toContain("Baixar nota fiscal");
++  });
++
++  // O assunto é texto puro no cliente de e-mail: escapar faria aparecer "&amp;"
++  // literalmente para o destinatário.
++  it("o assunto NÃO leva entidades HTML", () => {
++    const { assunto } = emailNotaEmitida({ ...base, nomeEmpresa: "Silva & Souza" });
++    expect(assunto).toContain("Silva & Souza");
++    expect(assunto).not.toContain("&amp;");
++  });
++});
+diff --git a/src/lib/email/resend.ts b/src/lib/email/resend.ts
+index e8c122d..08595fd 100644
+--- a/src/lib/email/resend.ts
++++ b/src/lib/email/resend.ts
+@@ -49,6 +49,53 @@ export async function enviarEmail(input: EnviarEmailInput): Promise<{ emailId: s
+   return { emailId: respostaSchema.parse(corpo).id };
+ }
+ 
++// ---------------------------------------------------------------------------
++// Escape de HTML (item M3)
++//
++// O template abaixo interpola nome do cliente, razão social e número da nota
++// direto no HTML. Todos vêm do banco, preenchidos por usuário, e o e-mail vai
++// para um TERCEIRO — o cliente do nosso cliente. Sem escape há dois problemas,
++// um chato e um sério:
++//
++// - Chato: "Silva & Souza" renderiza errado, e um "<" quebra o layout.
++// - Sério: um tenant cadastra cliente com HTML no nome e passa a enviar
++//   conteúdo arbitrário — um link de phishing, por exemplo — dentro de um
++//   e-mail que sai da NOSSA plataforma, com o nosso remetente.
++// ---------------------------------------------------------------------------
++
++const ESCAPES: Readonly<Record<string, string>> = {
++  "&": "&amp;",
++  "<": "&lt;",
++  ">": "&gt;",
++  '"': "&quot;",
++  "'": "&#39;",
++};
++
++/** Escapa texto para interpolação em conteúdo OU em valor de atributo HTML. */
++export function escaparHtml(valor: string): string {
++  return valor.replace(/[&<>"']/g, (c) => ESCAPES[c] ?? c);
++}
++
++/**
++ * URL para uso em `href`. Escapar não basta em contexto de atributo: `href` é
++ * executável, e `javascript:alert(1)` não tem um único caractere que o escape
++ * de HTML trate. Por isso a checagem aqui é de ESQUEMA, com lista de permitidos.
++ *
++ * Devolve `null` quando a URL não é utilizável — o chamador omite o botão em vez
++ * de renderizar um link quebrado ou perigoso.
++ */
++export function urlSegura(valor: string | null | undefined): string | null {
++  if (!valor) return null;
++  let url: URL;
++  try {
++    url = new URL(valor);
++  } catch {
++    return null; // relativa ou malformada — num e-mail não há base para resolver
++  }
++  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
++  return escaparHtml(url.toString());
++}
++
+ // ---------------------------------------------------------------------------
+ // Template: nota fiscal emitida
+ // ---------------------------------------------------------------------------
+@@ -59,21 +106,28 @@ export function emailNotaEmitida(dados: {
+   numeroNfse: string;
+   urlPdf: string | null;
+ }): { assunto: string; html: string } {
+-  const botaoPdf = dados.urlPdf
+-    ? `<p style="margin:24px 0"><a href="${dados.urlPdf}" style="background:#1570ef;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Baixar nota fiscal (PDF)</a></p>`
++  const nomeCliente = escaparHtml(dados.nomeCliente);
++  const nomeEmpresa = escaparHtml(dados.nomeEmpresa);
++  const numeroNfse = escaparHtml(dados.numeroNfse);
++  const href = urlSegura(dados.urlPdf);
++
++  const botaoPdf = href
++    ? `<p style="margin:24px 0"><a href="${href}" style="background:#1570ef;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Baixar nota fiscal (PDF)</a></p>`
+     : "";
+ 
+   return {
++    // O assunto é texto puro para o cliente de e-mail: entidades HTML
++    // apareceriam literalmente ("&amp;"), então aqui vão os valores originais.
+     assunto: `Sua nota fiscal nº ${dados.numeroNfse} — ${dados.nomeEmpresa}`,
+     html: `
+ <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#1e293b">
+   <h2 style="color:#1849a9">Nota fiscal emitida</h2>
+-  <p>Olá, ${dados.nomeCliente}!</p>
+-  <p><strong>${dados.nomeEmpresa}</strong> emitiu a nota fiscal de serviço
+-  <strong>nº ${dados.numeroNfse}</strong> referente ao seu pagamento.</p>
++  <p>Olá, ${nomeCliente}!</p>
++  <p><strong>${nomeEmpresa}</strong> emitiu a nota fiscal de serviço
++  <strong>nº ${numeroNfse}</strong> referente ao seu pagamento.</p>
+   ${botaoPdf}
+   <p style="color:#64748b;font-size:13px">Guarde este e-mail como comprovante.
+-  Em caso de dúvida, responda diretamente para ${dados.nomeEmpresa}.</p>
++  Em caso de dúvida, responda diretamente para ${nomeEmpresa}.</p>
+   <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+   <p style="color:#94a3b8;font-size:12px">Enviado automaticamente pela plataforma Agência Fiscal.</p>
+ </div>`.trim(),
+diff --git a/src/lib/env.test.ts b/src/lib/env.test.ts
+new file mode 100644
+index 0000000..c6ef691
+--- /dev/null
++++ b/src/lib/env.test.ts
+@@ -0,0 +1,58 @@
++import { describe, it, expect } from "vitest";
++import { verificarChavesInngest } from "@/lib/env";
++
++/**
++ * /api/inngest não é um endpoint qualquer: é ele que EXECUTA as funções,
++ * inclusive a máquina de estados da emissão. A signing key é o que separa
++ * "o Inngest pediu" de "alguém pediu".
++ *
++ * O desfecho perigoso não é a chave faltar e tudo quebrar — é o SDK INFERIR
++ * modo de desenvolvimento (deploy sem os sinais de plataforma que ele
++ * reconhece) e PULAR a verificação de assinatura em silêncio.
++ */
++describe("verificarChavesInngest", () => {
++  it("em produção, exige as duas chaves", () => {
++    expect(() =>
++      verificarChavesInngest({ signingKey: "signkey-x", eventKey: "evt-x", ehProducao: true }),
++    ).not.toThrow();
++  });
++
++  it("em produção, sem signing key, recusa e explica o risco", () => {
++    expect(() =>
++      verificarChavesInngest({ eventKey: "evt-x", ehProducao: true }),
++    ).toThrow(/INNGEST_SIGNING_KEY/);
++
++    expect(() => verificarChavesInngest({ eventKey: "evt-x", ehProducao: true })).toThrow(
++      /assinatura|aberto/i,
++    );
++  });
++
++  it("em produção, sem event key, também recusa", () => {
++    expect(() => verificarChavesInngest({ signingKey: "signkey-x", ehProducao: true })).toThrow(
++      /INNGEST_EVENT_KEY/,
++    );
++  });
++
++  it("nomeia as duas quando faltam as duas", () => {
++    try {
++      verificarChavesInngest({ ehProducao: true });
++      throw new Error("deveria ter lançado");
++    } catch (e) {
++      const msg = e instanceof Error ? e.message : "";
++      expect(msg).toContain("INNGEST_SIGNING_KEY");
++      expect(msg).toContain("INNGEST_EVENT_KEY");
++    }
++  });
++
++  // Dev Server local não usa nenhuma das duas — exigir aqui só criaria atrito
++  // e ensinaria a preencher variável com valor qualquer.
++  it("fora de produção, a ausência é o estado normal e passa em silêncio", () => {
++    expect(() => verificarChavesInngest({ ehProducao: false })).not.toThrow();
++  });
++
++  it("string vazia conta como ausente", () => {
++    expect(() =>
++      verificarChavesInngest({ signingKey: "", eventKey: "", ehProducao: true }),
++    ).toThrow(/INNGEST_SIGNING_KEY/);
++  });
++});
+diff --git a/src/lib/env.ts b/src/lib/env.ts
+index 8a8ec50..d2b6ee2 100644
+--- a/src/lib/env.ts
++++ b/src/lib/env.ts
+@@ -46,6 +46,16 @@ const serverEnvSchema = z.object({
+    * sempre reconsulta a API da Focus com o nosso token antes de gravar nada.
+    */
+   FOCUSNFE_WEBHOOK_TOKEN: z.string().min(16).optional(),
++  /**
++   * Chaves do Inngest. Opcionais no schema porque o Dev Server local não usa
++   * nenhuma das duas — a obrigatoriedade em produção é cobrada em
++   * `inngestEnv()`, abaixo, seguindo o mesmo padrão de `focusNfeEnv()`.
++   *
++   * INNGEST_SIGNING_KEY autentica as requisições que CHEGAM em /api/inngest.
++   * INNGEST_EVENT_KEY autentica os eventos que SAEM daqui para o Inngest Cloud.
++   */
++  INNGEST_SIGNING_KEY: z.string().min(1).optional(),
++  INNGEST_EVENT_KEY: z.string().min(1).optional(),
+ });
+ 
+ const publicEnvSchema = z.object({
+@@ -96,6 +106,62 @@ export function focusNfeEnv(): {
+   return { token: env.FOCUSNFE_TOKEN, ambiente: env.FOCUSNFE_AMBIENTE };
+ }
+ 
++/**
++ * Política de chaves do Inngest (item M4).
++ *
++ * O QUE ESTAVA ERRADO: `INNGEST_SIGNING_KEY` não existia em lugar nenhum — nem
++ * no schema, nem no .env.example, nem no `serve()`. E `/api/inngest` não é um
++ * endpoint qualquer: é ele que EXECUTA as funções, incluindo a máquina de
++ * estados da emissão.
++ *
++ * O SDK (v3) infere o "modo" a partir de sinais da plataforma (VERCEL_ENV,
++ * NODE_ENV=production, Netlify, Render...). Isso produz dois desfechos ruins,
++ * e qual deles acontece depende de ONDE o deploy roda:
++ *
++ * - Modo cloud sem a chave → `validateSignature` lança "No signing key found"
++ *   e TODA execução falha. Ruim, mas barulhento.
++ * - Modo dev inferido (container simples, Docker, VM própria — sem os sinais
++ *   que o SDK reconhece) → a validação de assinatura é PULADA por completo
++ *   (`if (this._mode && !this._mode.isCloud) return { success: true }`).
++ *   Aí /api/inngest aceita POST de qualquer origem e dispara funções. Este é o
++ *   desfecho silencioso, e é o que esta função existe para impedir.
++ *
++ * Por isso a verificação é explícita e nossa, em vez de delegada à inferência:
++ * em produção, sem chave, o endpoint recusa a servir.
++ */
++export function inngestEnv(): { signingKey?: string; eventKey?: string } {
++  const env = serverEnv();
++  return { signingKey: env.INNGEST_SIGNING_KEY, eventKey: env.INNGEST_EVENT_KEY };
++}
++
++/**
++ * Decide se é seguro servir /api/inngest. Pura e separada de `inngestEnv()`
++ * para ser testável sem mexer em process.env.
++ *
++ * Lança em vez de devolver `false`: um endpoint que executa a máquina de
++ * estados não deve ficar de pé "degradado". Em desenvolvimento, a ausência das
++ * chaves é o estado normal (Dev Server) e passa sem ruído.
++ */
++export function verificarChavesInngest(params: {
++  signingKey?: string;
++  eventKey?: string;
++  ehProducao: boolean;
++}): void {
++  if (!params.ehProducao) return;
++
++  const faltando: string[] = [];
++  if (!params.signingKey) faltando.push("INNGEST_SIGNING_KEY");
++  if (!params.eventKey) faltando.push("INNGEST_EVENT_KEY");
++  if (faltando.length === 0) return;
++
++  throw new Error(
++    `${faltando.join(" e ")} ausente(s) em produção. Sem a signing key, o SDK ou ` +
++      "recusa toda execução ou — se inferir modo de desenvolvimento — PULA a " +
++      "verificação de assinatura, deixando /api/inngest aberto para qualquer um " +
++      "disparar as funções. Chaves em https://app.inngest.com/secrets",
++  );
++}
++
+ /** Seguro em qualquer lugar — apenas valores públicos. */
+ export function publicEnv() {
+   return publicEnvSchema.parse({
+diff --git a/src/services/empresas.test.ts b/src/services/empresas.test.ts
+index 45468c6..ed605c9 100644
+--- a/src/services/empresas.test.ts
++++ b/src/services/empresas.test.ts
+@@ -3,6 +3,8 @@ import {
+   atualizarDadosFiscais,
+   atualizarProviderFiscal,
+   dadosFiscaisSchema,
++  pareceArquivoPfx,
++  salvarCertificadoA1,
+ } from "@/services/empresas";
+ import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+ import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
+@@ -180,3 +182,95 @@ describe("dadosFiscaisSchema — simplesPorFora", () => {
+     expect(updates).toHaveLength(0);
+   });
+ });
++
++// ---------------------------------------------------------------------------
++// Magic bytes do certificado A1 (item M1)
++//
++// Sem a checagem, um .pem renomeado para .pfx é criptografado e guardado sem
++// reclamação. A falha só aparece dentro do motor, na hora de assinar, como erro
++// opaco — com o usuário longe da tela de configurações.
++// ---------------------------------------------------------------------------
++
++/** DER: SEQUENCE (0x30) + comprimento em forma longa + conteúdo. */
++function pfxFalso(formaLonga = 0x82, tamanho = 2048): Buffer {
++  const b = Buffer.alloc(tamanho, 0x41);
++  b[0] = 0x30;
++  b[1] = formaLonga;
++  return b;
++}
++
++describe("pareceArquivoPfx", () => {
++  it("aceita DER com comprimento em forma longa", () => {
++    for (const forma of [0x81, 0x82, 0x83]) {
++      expect(pareceArquivoPfx(pfxFalso(forma))).toBe(true);
++    }
++  });
++
++  it("recusa PEM — o engano mais provável de quem sobe certificado", () => {
++    expect(pareceArquivoPfx(Buffer.from("-----BEGIN CERTIFICATE-----\nMIIF...", "utf8"))).toBe(
++      false,
++    );
++  });
++
++  it("recusa outros formatos renomeados", () => {
++    expect(pareceArquivoPfx(Buffer.from("%PDF-1.7\n%...", "utf8"))).toBe(false);
++    expect(pareceArquivoPfx(Buffer.from([0x50, 0x4b, 0x03, 0x04]))).toBe(false); // ZIP
++    expect(pareceArquivoPfx(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(false); // PNG
++  });
++
++  it("recusa buffer curto demais para ter cabeçalho", () => {
++    expect(pareceArquivoPfx(Buffer.alloc(0))).toBe(false);
++    expect(pareceArquivoPfx(Buffer.from([0x30, 0x82]))).toBe(false);
++  });
++
++  // Forma curta significa conteúdo < 256 bytes: certificado nenhum é tão pequeno.
++  it("recusa DER com comprimento em forma curta", () => {
++    expect(pareceArquivoPfx(Buffer.from([0x30, 0x20, 0x00, 0x00]))).toBe(false);
++  });
++});
++
++describe("salvarCertificadoA1", () => {
++  const CHAVE = Buffer.alloc(32, 7).toString("base64");
++
++  function bancoComStorage() {
++    const uploads: string[] = [];
++    const db = fakeSupabase((): FakeResult => ({ data: null, error: null })) as never as Parameters<
++      typeof salvarCertificadoA1
++    >[0];
++    (db as unknown as { storage: unknown }).storage = {
++      from: () => ({
++        upload: (caminho: string) => {
++          uploads.push(caminho);
++          return Promise.resolve({ error: null });
++        },
++      }),
++    };
++    return { db, uploads };
++  }
++
++  it("recusa arquivo que não é PFX e NÃO grava nada", async () => {
++    const { db, uploads } = bancoComStorage();
++    await expect(
++      salvarCertificadoA1(db, {
++        empresaId: EMPRESA,
++        arquivoPfx: Buffer.from("-----BEGIN CERTIFICATE-----", "utf8"),
++        senhaPfx: "senha",
++        chaveCriptografiaBase64: CHAVE,
++      }),
++    ).rejects.toThrow(/não parece um certificado A1/);
++
++    expect(uploads).toHaveLength(0);
++  });
++
++  it("aceita PFX válido e grava no caminho do tenant", async () => {
++    const { db, uploads } = bancoComStorage();
++    await salvarCertificadoA1(db, {
++      empresaId: EMPRESA,
++      arquivoPfx: pfxFalso(),
++      senhaPfx: "senha",
++      chaveCriptografiaBase64: CHAVE,
++    });
++
++    expect(uploads).toEqual([`${EMPRESA}/certificado-a1.enc`]);
++  });
++});
+diff --git a/src/services/empresas.ts b/src/services/empresas.ts
+index c8aa4c8..97bee51 100644
+--- a/src/services/empresas.ts
++++ b/src/services/empresas.ts
+@@ -175,6 +175,30 @@ function cifrar(dados: Buffer, chaveBase64: string): Cifrado {
+   return { blob: Buffer.concat([iv, authTag, ciphertext]).toString("base64") };
+ }
+ 
++/**
++ * Checagem de magic bytes do .pfx (item M1).
++ *
++ * Um PKCS#12 é uma estrutura DER: começa com 0x30 (SEQUENCE) seguido de um byte
++ * de comprimento em forma longa (0x81/0x82/0x83 — um certificado real tem
++ * sempre mais de 255 bytes, então nunca é forma curta).
++ *
++ * O QUE ISTO PEGA: .pem, .cer, .crt, PDF, imagem, ZIP, ou qualquer arquivo
++ * renomeado para .pfx. Sem a checagem, o arquivo é criptografado e guardado sem
++ * reclamação, e a falha só aparece muito depois — dentro do motor, na hora de
++ * assinar, como erro opaco, com o usuário longe da tela de configurações.
++ *
++ * O QUE ISTO **NÃO** FAZ: não valida o certificado, não confere a senha, não
++ * checa validade nem cadeia. Isso exigiria parse de ASN.1 (node-forge/openssl) e
++ * fica para quando houver o fluxo de assinatura. Aqui é rejeição barata e
++ * imediata do que é obviamente não-PFX — não é atestado de que o arquivo presta.
++ */
++export function pareceArquivoPfx(buffer: Buffer): boolean {
++  if (buffer.length < 4) return false;
++  if (buffer[0] !== 0x30) return false;
++  const comprimento = buffer[1];
++  return comprimento === 0x81 || comprimento === 0x82 || comprimento === 0x83;
++}
++
+ export async function salvarCertificadoA1(
+   db: SupabaseClient<Database>,
+   params: {
+@@ -187,6 +211,13 @@ export async function salvarCertificadoA1(
+   if (params.arquivoPfx.length === 0 || params.arquivoPfx.length > 512 * 1024) {
+     throw new Error("Arquivo .pfx inválido (vazio ou maior que 512 KB).");
+   }
++  if (!pareceArquivoPfx(params.arquivoPfx)) {
++    throw new Error(
++      "O arquivo enviado não parece um certificado A1 (.pfx/.p12). Certificados em " +
++        ".pem, .cer ou .crt não servem: o A1 precisa conter a chave privada. " +
++        "Baixe o arquivo .pfx original entregue pela sua certificadora.",
++    );
++  }
+   if (params.senhaPfx.length < 1) {
+     throw new Error("Senha do certificado é obrigatória.");
+   }
+-- 
+2.43.0
+

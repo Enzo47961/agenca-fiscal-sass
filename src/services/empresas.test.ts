@@ -3,6 +3,8 @@ import {
   atualizarDadosFiscais,
   atualizarProviderFiscal,
   dadosFiscaisSchema,
+  pareceArquivoPfx,
+  salvarCertificadoA1,
 } from "@/services/empresas";
 import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
 import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
@@ -178,5 +180,97 @@ describe("dadosFiscaisSchema — simplesPorFora", () => {
     ).rejects.toThrow();
 
     expect(updates).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Magic bytes do certificado A1 (item M1)
+//
+// Sem a checagem, um .pem renomeado para .pfx é criptografado e guardado sem
+// reclamação. A falha só aparece dentro do motor, na hora de assinar, como erro
+// opaco — com o usuário longe da tela de configurações.
+// ---------------------------------------------------------------------------
+
+/** DER: SEQUENCE (0x30) + comprimento em forma longa + conteúdo. */
+function pfxFalso(formaLonga = 0x82, tamanho = 2048): Buffer {
+  const b = Buffer.alloc(tamanho, 0x41);
+  b[0] = 0x30;
+  b[1] = formaLonga;
+  return b;
+}
+
+describe("pareceArquivoPfx", () => {
+  it("aceita DER com comprimento em forma longa", () => {
+    for (const forma of [0x81, 0x82, 0x83]) {
+      expect(pareceArquivoPfx(pfxFalso(forma))).toBe(true);
+    }
+  });
+
+  it("recusa PEM — o engano mais provável de quem sobe certificado", () => {
+    expect(pareceArquivoPfx(Buffer.from("-----BEGIN CERTIFICATE-----\nMIIF...", "utf8"))).toBe(
+      false,
+    );
+  });
+
+  it("recusa outros formatos renomeados", () => {
+    expect(pareceArquivoPfx(Buffer.from("%PDF-1.7\n%...", "utf8"))).toBe(false);
+    expect(pareceArquivoPfx(Buffer.from([0x50, 0x4b, 0x03, 0x04]))).toBe(false); // ZIP
+    expect(pareceArquivoPfx(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(false); // PNG
+  });
+
+  it("recusa buffer curto demais para ter cabeçalho", () => {
+    expect(pareceArquivoPfx(Buffer.alloc(0))).toBe(false);
+    expect(pareceArquivoPfx(Buffer.from([0x30, 0x82]))).toBe(false);
+  });
+
+  // Forma curta significa conteúdo < 256 bytes: certificado nenhum é tão pequeno.
+  it("recusa DER com comprimento em forma curta", () => {
+    expect(pareceArquivoPfx(Buffer.from([0x30, 0x20, 0x00, 0x00]))).toBe(false);
+  });
+});
+
+describe("salvarCertificadoA1", () => {
+  const CHAVE = Buffer.alloc(32, 7).toString("base64");
+
+  function bancoComStorage() {
+    const uploads: string[] = [];
+    const db = fakeSupabase((): FakeResult => ({ data: null, error: null })) as never as Parameters<
+      typeof salvarCertificadoA1
+    >[0];
+    (db as unknown as { storage: unknown }).storage = {
+      from: () => ({
+        upload: (caminho: string) => {
+          uploads.push(caminho);
+          return Promise.resolve({ error: null });
+        },
+      }),
+    };
+    return { db, uploads };
+  }
+
+  it("recusa arquivo que não é PFX e NÃO grava nada", async () => {
+    const { db, uploads } = bancoComStorage();
+    await expect(
+      salvarCertificadoA1(db, {
+        empresaId: EMPRESA,
+        arquivoPfx: Buffer.from("-----BEGIN CERTIFICATE-----", "utf8"),
+        senhaPfx: "senha",
+        chaveCriptografiaBase64: CHAVE,
+      }),
+    ).rejects.toThrow(/não parece um certificado A1/);
+
+    expect(uploads).toHaveLength(0);
+  });
+
+  it("aceita PFX válido e grava no caminho do tenant", async () => {
+    const { db, uploads } = bancoComStorage();
+    await salvarCertificadoA1(db, {
+      empresaId: EMPRESA,
+      arquivoPfx: pfxFalso(),
+      senhaPfx: "senha",
+      chaveCriptografiaBase64: CHAVE,
+    });
+
+    expect(uploads).toEqual([`${EMPRESA}/certificado-a1.enc`]);
   });
 });
