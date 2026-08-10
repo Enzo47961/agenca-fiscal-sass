@@ -187,6 +187,17 @@ export async function solicitarEmissao(
       // fórmula ou os dados de entrada mudarem. `issqn_centavos` grava o valor
       // EFETIVAMENTE usado — derivado ou informado —, para que a base seja
       // reproduzível só com o que está nesta linha.
+      // C7 — registro da confirmação de elegibilidade. Só existe fora do
+      // regime padrão: gravar autor e data numa nota `padrao` inventaria uma
+      // confirmação que ninguém deu, e poluiria a consulta de auditoria com
+      // exatamente as linhas que não interessam a ela.
+      //
+      // O schema já garante que, fora do padrão, a confirmação existe e tem
+      // autor; o CHECK do banco recusa a combinação de qualquer forma. O
+      // `?? null` aqui é para o compilador, não para o caso real.
+      regime_confirmado_por:
+        dados.regimeIbsCbs === "padrao" ? null : (dados.confirmadoPorUserId ?? null),
+      regime_confirmado_em: dados.regimeIbsCbs === "padrao" ? null : new Date().toISOString(),
       ibscbs_base_centavos: base.baseCentavos,
       desconto_incondicionado_centavos: base.descontoIncondicionadoCentavos,
       ajuste_base_centavos: base.ajusteBaseCentavos,

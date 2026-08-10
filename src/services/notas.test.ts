@@ -114,6 +114,49 @@ describe("solicitarEmissaoSchema — confirmação de regime diferenciado (C7)",
   });
 });
 
+describe("solicitarEmissao — registro da confirmação (C7)", () => {
+  const usuario = "55555555-5555-5555-5555-555555555555";
+
+  it("grava quem confirmou e quando, na própria nota", async () => {
+    const { db, payload } = dbCapturandoInsert();
+    const antes = Date.now();
+
+    await solicitarEmissao(db, {
+      ...base,
+      regimeIbsCbs: "reducao_60",
+      confirmacaoRegimeDiferenciado: true,
+      confirmadoPorUserId: usuario,
+    });
+
+    const p = payload();
+    expect(p.regime_confirmado_por).toBe(usuario);
+    expect(typeof p.regime_confirmado_em).toBe("string");
+    // Instante do registro, não uma data qualquer copiada de outro campo.
+    expect(new Date(p.regime_confirmado_em as string).getTime()).toBeGreaterThanOrEqual(antes);
+  });
+
+  it("nota em regime padrão NÃO recebe registro de confirmação", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, base);
+
+    const p = payload();
+    // Gravar autor e data aqui inventaria uma confirmação que ninguém deu.
+    expect(p.regime_confirmado_por).toBeNull();
+    expect(p.regime_confirmado_em).toBeNull();
+  });
+
+  it("regime padrão ignora um userId que chegue junto", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, { ...base, confirmadoPorUserId: usuario });
+
+    // A Server Action manda `estado.userId` sempre; o que decide o registro é
+    // o regime, não a presença do campo.
+    expect(payload().regime_confirmado_por).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // B7 — base de cálculo LIGADA ao fluxo de criação da nota.
 //

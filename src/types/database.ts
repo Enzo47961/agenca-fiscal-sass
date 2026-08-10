@@ -451,6 +451,8 @@ export type Database = {
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
+          regime_confirmado_em: string | null
+          regime_confirmado_por: string | null
           regime_ibscbs: string
           split_retido_centavos: number | null
           status: Database["public"]["Enums"]["nota_status"]
@@ -506,6 +508,8 @@ export type Database = {
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
+          regime_confirmado_em?: string | null
+          regime_confirmado_por?: string | null
           regime_ibscbs?: string
           split_retido_centavos?: number | null
           status?: Database["public"]["Enums"]["nota_status"]
@@ -561,6 +565,8 @@ export type Database = {
           provider_id?: string | null
           proxima_tentativa_em?: string | null
           referencia_externa?: string
+          regime_confirmado_em?: string | null
+          regime_confirmado_por?: string | null
           regime_ibscbs?: string
           split_retido_centavos?: number | null
           status?: Database["public"]["Enums"]["nota_status"]
@@ -823,6 +829,8 @@ export type Database = {
           provider_id: string | null
           proxima_tentativa_em: string | null
           referencia_externa: string
+          regime_confirmado_em: string | null
+          regime_confirmado_por: string | null
           regime_ibscbs: string
           split_retido_centavos: number | null
           status: Database["public"]["Enums"]["nota_status"]
