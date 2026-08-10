@@ -1,5 +1,12 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { type Database } from "@/types/database";
+import {
+  chaveItemLc116,
+  classificarCorrelacao,
+  type CorrelacaoItem,
+  type OpcaoCClassTrib,
+} from "@/lib/fiscal/correlacao";
+import { type ReducaoOficial } from "@/lib/fiscal/reforma";
 
 /**
  * Acesso às tabelas de domínio nacional do grupo IBSCBS (`cst_ibscbs`,
@@ -68,4 +75,80 @@ export async function carregarCClassTribConhecidos(
   const conjunto: ReadonlySet<string> = new Set(data.map((l) => l.codigo));
   cache = { valor: conjunto, expiraEm: agora + TTL_MS };
   return conjunto;
+}
+
+/**
+ * Correlação oficial do item da LC 116 (Anexo VIII), já classificada em A/B/C.
+ *
+ * Lê a view `item_lc116_cclasstrib_nfse`, que aplica dois filtros no banco em
+ * vez de em memória: só códigos válidos para NFS-e (`aplica_nfse`) e só os
+ * vigentes hoje (`vigencia_fim`). Oferecer um código de vigência encerrada
+ * seria rejeição garantida, e oferecer um exclusivo de NF-e também.
+ */
+export async function correlacaoDoItem(
+  db: SupabaseClient<Database>,
+  codigoServico: string,
+): Promise<CorrelacaoItem> {
+  const item = chaveItemLc116(codigoServico);
+
+  const { data, error } = await db
+    .from("item_lc116_cclasstrib_nfse")
+    // String literal única, sem concatenar: o supabase-js infere o tipo do
+    // retorno a partir do LITERAL passado aqui. Quebrar em duas partes com `+`
+    // devolve `string` e o resultado vira `GenericStringError`.
+    .select(
+      "codigo, cst, descricao_oficial, perc_reducao_ibs, perc_reducao_cbs, ind_trib_regular, ind_cred_pres, artigo_lc214, url_legislacao",
+    )
+    .eq("item_lc116", item)
+    .order("ordem");
+
+  if (error) {
+    throw new Error(`Falha ao consultar a correlação oficial do item ${item}: ${error.message}`);
+  }
+
+  const opcoes: OpcaoCClassTrib[] = (data ?? []).map((l) => ({
+    codigo: l.codigo ?? "",
+    cst: l.cst ?? "",
+    descricaoOficial: l.descricao_oficial ?? "",
+    percReducaoIbs: Number(l.perc_reducao_ibs ?? 0),
+    percReducaoCbs: Number(l.perc_reducao_cbs ?? 0),
+    exigeTribRegular: Boolean(l.ind_trib_regular),
+    permiteCredPres: Boolean(l.ind_cred_pres),
+    artigoLc214: l.artigo_lc214,
+    urlLegislacao: l.url_legislacao,
+  }));
+
+  return classificarCorrelacao(item, opcoes);
+}
+
+/**
+ * Redução oficial de um cClassTrib, para o cálculo do destaque.
+ *
+ * É o que faz as RN 104/111/118 do Anexo VI serem respeitadas: o percentual
+ * usado no cálculo passa a ser o da tabela, não o derivado do nosso enum. Ver
+ * `fatoresReducao()` em lib/fiscal/reforma.ts.
+ *
+ * Devolve `null` quando o código não existe — quem chama decide, e no caso da
+ * criação de nota a validação do grupo já terá recusado antes.
+ */
+export async function carregarReducaoOficial(
+  db: SupabaseClient<Database>,
+  cClassTrib: string,
+): Promise<ReducaoOficial | null> {
+  const { data, error } = await db
+    .from("cclasstrib_ibscbs")
+    .select("codigo, perc_reducao_ibs, perc_reducao_cbs")
+    .eq("codigo", cClassTrib)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Falha ao carregar a redução oficial de ${cClassTrib}: ${error.message}`);
+  }
+  if (!data) return null;
+
+  return {
+    cClassTrib: data.codigo,
+    ibs: Number(data.perc_reducao_ibs ?? 0),
+    cbs: Number(data.perc_reducao_cbs ?? 0),
+  };
 }

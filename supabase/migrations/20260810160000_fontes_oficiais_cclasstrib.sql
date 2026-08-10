@@ -7,7 +7,7 @@
 --        https://dfe-portal.svrs.rs.gov.br/CFF/ClassificacaoTributaria
 --        JSON `dadosOriginais` embarcado na pagina.
 --        Publicacao mais recente na tabela: 2026-06-22
---        SHA-256 do conteudo importado: f2f0688022232d5d7a7bacfd18f8864085765b46642af118173be0e9800fb1cc
+--        SHA-256 do conteudo importado: f2d11e8974f3210ce1e47457609c9b532a8b3de26c76b3eae772dafc4f41279d
 --
 --   [F2] Anexo VIII — Correlacao Item LC116 / NBS / cIndOp / cClassTrib
 --        V1.01.00 (NT 008), planilha oficial do portal da NFS-e:
@@ -655,7 +655,7 @@ ORDER BY i.item_lc116, i.ordem;
 INSERT INTO fiscal_fonte_versao (fonte, url, versao, publicado_em, hash_conteudo, registros)
 VALUES
   ('svrs_cclasstrib', 'https://dfe-portal.svrs.rs.gov.br/CFF/ClassificacaoTributaria',
-   'pub-2026-06-22', '2026-06-22', 'f2f0688022232d5d7a7bacfd18f8864085765b46642af118173be0e9800fb1cc', 164),
+   'pub-2026-06-22', '2026-06-22', 'f2d11e8974f3210ce1e47457609c9b532a8b3de26c76b3eae772dafc4f41279d', 164),
   ('nfse_anexo_viii', 'https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/rtc/anexoviii-correlacaoitemnbsindopcclasstrib_ibscbs_v1-01-00.xlsx',
    'V1.01.00', NULL, '0e5df30846016bae1e0f9c4b0df677187b96e4b1867d2dd16fba1487de60d640', 281)
 ON CONFLICT (fonte, hash_conteudo) DO NOTHING;

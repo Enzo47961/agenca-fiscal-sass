@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { CheckCircle2, HelpCircle, Loader2, SendHorizonal } from "lucide-react";
-import { emitirNotaAction, type EmissaoResult } from "./actions";
+import { consultarCorrelacaoAction, emitirNotaAction, type EmissaoResult } from "./actions";
+import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
 import { REGIME_IBSCBS_LABEL, TIPO_AJUSTE_BASE_LABEL } from "@/lib/fiscal/reforma";
 import { REGIMES_NBS_SOB_DUVIDA } from "@/lib/fiscal/regimes";
 
@@ -30,7 +31,40 @@ export function FormularioEmissao({
   const [resultado, setResultado] = useState<EmissaoResult | null>(null);
   // C7: a confirmação só faz sentido — e só é exigida — fora do regime padrão.
   const [regime, setRegime] = useState<string>("padrao");
-  const regimeDiferenciado = regime !== "padrao";
+
+  // Correlação oficial do item de serviço (Anexo VIII). Consultada quando o
+  // usuário termina de digitar o código, não a cada tecla.
+  const [correlacao, setCorrelacao] = useState<CorrelacaoItem | null>(null);
+  const [consultando, setConsultando] = useState(false);
+  const [cClassTrib, setCClassTrib] = useState("");
+
+  async function buscarCorrelacao(codigo: string) {
+    const limpo = codigo.trim();
+    if (!limpo) {
+      setCorrelacao(null);
+      setCClassTrib("");
+      return;
+    }
+    setConsultando(true);
+    const r = await consultarCorrelacaoAction(limpo);
+    setConsultando(false);
+    if (!r.ok) {
+      setCorrelacao(null);
+      return;
+    }
+    setCorrelacao(r.correlacao);
+    // Categoria A não vira campo: o serviço preenche. Nas demais o usuário
+    // escolhe, e não pré-selecionamos nada — pré-seleção é sugestão disfarçada.
+    setCClassTrib("");
+  }
+
+  const opcaoEscolhida = correlacao?.opcoes.find((o) => o.codigo === cClassTrib) ?? null;
+  const escolhaTemReducao =
+    !!opcaoEscolhida && (opcaoEscolhida.percReducaoIbs > 0 || opcaoEscolhida.percReducaoCbs > 0);
+
+  // A confirmação é uma só, venha a afirmação do regime ou do código escolhido:
+  // as duas afirmam enquadramento, e a auditoria precisa de um registro único.
+  const regimeDiferenciado = regime !== "padrao" || escolhaTemReducao;
 
   const nbsSobDuvida = REGIMES_NBS_SOB_DUVIDA.some((r) => r === regimeTributario);
 
@@ -101,8 +135,18 @@ export function FormularioEmissao({
 
         <label className="block">
           <span className="mb-1 block text-sm text-slate-600">Código de serviço (LC 116) *</span>
-          <input name="codigoServico" required placeholder="01.05" maxLength={5} className={inputClasses} />
-          <Ajuda>Formato XX.XX — confira no verificador em Configurações.</Ajuda>
+          <input
+            name="codigoServico"
+            required
+            placeholder="01.05"
+            maxLength={8}
+            className={inputClasses}
+            onBlur={(e) => void buscarCorrelacao(e.target.value)}
+          />
+          <Ajuda>
+            Formato XX.XX — confira no verificador em Configurações. É por ele que buscamos a
+            classificação de IBS/CBS na tabela oficial.
+          </Ajuda>
         </label>
 
         <label className="block">
@@ -176,6 +220,116 @@ export function FormularioEmissao({
         </label>
 
         {/*
+          Classificação tributária (grupo IBSCBS), a partir da correlação
+          oficial do Anexo VIII para o item de serviço digitado.
+
+          O que NÃO fazemos aqui, e é o ponto do desenho: não oferecemos os 71
+          códigos de NFS-e, muito menos os 164 da tabela. Só os que o Anexo VIII
+          correlaciona AO ITEM — que costumam ser um ou dois. Uma lista de 71
+          opções sem orientação seria escolha no escuro com aparência de
+          conformidade.
+        */}
+        {consultando ? (
+          <p className="sm:col-span-2 text-xs text-slate-500">
+            Consultando a classificação oficial do item…
+          </p>
+        ) : null}
+
+        {correlacao && !consultando ? (
+          <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+            <p className="text-sm font-medium text-slate-700">
+              Classificação tributária de IBS/CBS
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{correlacao.motivo}</p>
+
+            {correlacao.categoria === "automatica" && correlacao.automatica ? (
+              // Nada para escolher: o serviço preenche. Mostramos o que vai ser
+              // gravado porque preencher em silêncio esconderia do usuário uma
+              // declaração feita em nome dele.
+              <p className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-900">
+                Será declarado <strong>CST {correlacao.automatica.cst}</strong> ·{" "}
+                <strong>cClassTrib {correlacao.automatica.codigo}</strong> —{" "}
+                {correlacao.automatica.descricaoOficial}
+              </p>
+            ) : null}
+
+            {correlacao.categoria === "confirmacao" ? (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-sm text-slate-600">
+                  Classificação aplicável a este serviço *
+                </span>
+                <select
+                  name="ibscbsCClassTrib"
+                  required
+                  value={cClassTrib}
+                  onChange={(e) => setCClassTrib(e.target.value)}
+                  className={inputClasses}
+                >
+                  <option value="" disabled>
+                    Selecione…
+                  </option>
+                  {correlacao.opcoes.map((o) => (
+                    <option key={o.codigo} value={o.codigo}>
+                      {o.codigo} — {o.descricaoOficial.slice(0, 110)}
+                      {o.percReducaoIbs > 0 || o.percReducaoCbs > 0
+                        ? ` (redução ${Math.round(o.percReducaoIbs * 100)}%${
+                            o.percReducaoCbs !== o.percReducaoIbs
+                              ? ` IBS / ${Math.round(o.percReducaoCbs * 100)}% CBS`
+                              : ""
+                          })`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+                {opcaoEscolhida ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    {opcaoEscolhida.artigoLc214 ? <>{opcaoEscolhida.artigoLc214}. </> : null}
+                    {opcaoEscolhida.exigeTribRegular ? (
+                      <span className="text-amber-800">
+                        Este código exige o grupo de tributação regular, que ainda não
+                        preenchemos — confirme com seu contador antes de emitir.{" "}
+                      </span>
+                    ) : null}
+                    {opcaoEscolhida.urlLegislacao ? (
+                      <a
+                        href={opcaoEscolhida.urlLegislacao}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-brand-600 underline"
+                      >
+                        Ver o dispositivo na LC 214/2025
+                      </a>
+                    ) : null}
+                  </p>
+                ) : null}
+              </label>
+            ) : null}
+
+            {correlacao.categoria === "sem_correlacao" ? (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-sm text-slate-600">
+                  Código de classificação tributária (cClassTrib)
+                </span>
+                <input
+                  name="ibscbsCClassTrib"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="6 dígitos"
+                  value={cClassTrib}
+                  onChange={(e) => setCClassTrib(e.target.value)}
+                  className={inputClasses}
+                />
+                <Ajuda>
+                  Sem sugestão de propósito: a tabela oficial não correlaciona nenhum código a
+                  este item. O código informado é validado contra a tabela antes de a nota ser
+                  criada.
+                </Ajuda>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/*
           C7. Regime diferenciado era escolha livre: qualquer operador marcava
           "redução de 60%" em qualquer nota, sem vínculo com a atividade. Isto
           NÃO valida elegibilidade — validar exige a correlação atividade ↔
@@ -195,8 +349,19 @@ export function FormularioEmissao({
                 className="mt-0.5 h-4 w-4 shrink-0 rounded border-amber-400"
               />
               <span className="text-sm text-amber-900">
+                {/*
+                  A confirmação é uma só, mas o que ela afirma muda: pode vir do
+                  regime escolhido, do cClassTrib com redução, ou dos dois.
+                  Repetir o rótulo do regime quando quem pede é o código diria
+                  "Padrão (alíquota cheia)" numa nota com 60% de redução.
+                */}
                 Confirmo que esta atividade se enquadra em{" "}
-                <strong>{REGIME_IBSCBS_LABEL[regime as keyof typeof REGIME_IBSCBS_LABEL]}</strong>.
+                <strong>
+                  {escolhaTemReducao && opcaoEscolhida
+                    ? `${opcaoEscolhida.codigo} — ${opcaoEscolhida.descricaoOficial}`
+                    : REGIME_IBSCBS_LABEL[regime as keyof typeof REGIME_IBSCBS_LABEL]}
+                </strong>
+                .
                 <span className="mt-1 block text-xs text-amber-800">
                   A confirmação fica registrada nesta nota com seu usuário e a data. Em caso de
                   dúvida sobre o enquadramento, consulte seu contador antes de emitir — a partir de

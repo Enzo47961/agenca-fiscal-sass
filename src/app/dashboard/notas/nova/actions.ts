@@ -2,6 +2,30 @@
 
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { solicitarEmissao, solicitarEmissaoSchema } from "@/services/notas";
+import { correlacaoDoItem } from "@/services/dominio-fiscal";
+import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
+
+/**
+ * Correlação oficial (Anexo VIII) do item de serviço digitado.
+ *
+ * Consultada sob demanda em vez de embarcada na página: são 281 correlações em
+ * 207 itens, e o formulário precisa de UMA delas. Mandar a tabela inteira para
+ * o browser a cada carregamento pagaria o custo de todas para usar uma.
+ */
+export async function consultarCorrelacaoAction(
+  codigoServico: string,
+): Promise<{ ok: true; correlacao: CorrelacaoItem } | { ok: false; erro: string }> {
+  const db = createSessionClient();
+  const estado = await estadoDaSessao(db);
+  if (estado.tipo !== "com_empresa") {
+    return { ok: false, erro: "Sessão expirada. Faça login novamente." };
+  }
+  try {
+    return { ok: true, correlacao: await correlacaoDoItem(db, codigoServico) };
+  } catch (e) {
+    return { ok: false, erro: e instanceof Error ? e.message : "Erro ao consultar a correlação." };
+  }
+}
 
 export interface EmissaoResult {
   ok: boolean;
@@ -62,6 +86,16 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     // confirmação a outra pessoa.
     confirmacaoRegimeDiferenciado: formData.get("confirmacaoRegime") === "on",
     confirmadoPorUserId: estado.userId,
+    // Grupo IBSCBS escolhido na tela. Ausente = o serviço decide: preenche
+    // sozinho se a correlação oficial for da categoria A, e deixa em branco
+    // nos demais casos.
+    declaracaoIbsCbs: (() => {
+      const cClassTrib = String(formData.get("ibscbsCClassTrib") ?? "").trim();
+      if (!cClassTrib) return undefined;
+      // Os 3 primeiros dígitos do cClassTrib SÃO o CST — regra estrutural da
+      // tabela oficial. Derivar evita que a tela mande um par incoerente.
+      return { cst: cClassTrib.slice(0, 3), cClassTrib };
+    })(),
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

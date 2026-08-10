@@ -320,22 +320,48 @@ async function main() {
     if (total > 0 && !opt.json) {
       console.log("\n(dry-run — nada foi gravado. Use --apply para aplicar.)");
     }
-    process.exit(total > 0 ? 10 : 0);
+    // `process.exitCode` e não `process.exit()`: encerrar de imediato com os
+    // handles do cliente HTTP ainda abertos dispara uma assertion do libuv no
+    // Windows ("!(handle->flags & UV_HANDLE_CLOSING)") e o processo morre com
+    // 0xC0000409 — engolindo justamente o código que queríamos comunicar ao CI.
+    process.exitCode = total > 0 ? 10 : 0;
+    return;
   }
 
   if (total === 0) {
     if (!opt.json) console.log("\nNada a aplicar.");
-    process.exit(0);
+    return;
   }
 
-  // Upsert só do que veio da fonte. Ausentes NÃO são apagados de propósito:
-  // um código já declarado numa nota emitida precisa continuar resolvível para
-  // a nota permanecer legível.
-  const paraGravar = novas.map((r) => ({ ...r }));
-  const { error: erroUpsert } = await db
-    .from("cclasstrib_ibscbs")
-    .upsert(paraGravar, { onConflict: "codigo" });
-  if (erroUpsert) throw new Error(`Falha ao gravar: ${erroUpsert.message}`);
+  // Grava só o que mudou, e separa INSERT de UPDATE de propósito.
+  //
+  // Um `upsert` do lote inteiro parece mais simples e não funciona: o PostgREST
+  // monta INSERT ... ON CONFLICT, então a linha precisa satisfazer os NOT NULL
+  // mesmo quando o desfecho é UPDATE — e `descricao` (nosso rótulo curto) não
+  // vem da fonte. O upsert quebrava com "null value in column descricao".
+  //
+  // A separação também protege o que é nosso: em código já existente,
+  // `descricao` NÃO é tocada. A fonte manda no texto oficial, nós mandamos no
+  // rótulo curto.
+  const alterar = [...diff.alterados, ...diff.vigenciaMudou].map((d) => d.codigo);
+  const porCodigo = new Map(novas.map((r) => [r.codigo, r]));
+
+  for (const codigo of alterar) {
+    const { codigo: _pk, ...campos } = porCodigo.get(codigo);
+    const { error: e } = await db.from("cclasstrib_ibscbs").update(campos).eq("codigo", codigo);
+    if (e) throw new Error(`Falha ao atualizar ${codigo}: ${e.message}`);
+  }
+
+  if (diff.novos.length) {
+    // Código novo não tem rótulo curto nosso — o texto oficial é o único
+    // honesto para `descricao` até alguém encurtá-lo conscientemente.
+    const inserir = diff.novos.map((r) => ({ ...r, descricao: r.descricao_oficial }));
+    const { error: e } = await db.from("cclasstrib_ibscbs").insert(inserir);
+    if (e) throw new Error(`Falha ao inserir códigos novos: ${e.message}`);
+  }
+
+  // Ausentes NÃO são apagados de propósito: um código já declarado numa nota
+  // emitida precisa continuar resolvível para a nota permanecer legível.
 
   const { error: erroVersao } = await db.from("fiscal_fonte_versao").upsert(
     {
@@ -351,10 +377,9 @@ async function main() {
   if (erroVersao) throw new Error(`Falha ao registrar versão: ${erroVersao.message}`);
 
   if (!opt.json) console.log(`\nAplicado. ${total} diferença(s) gravada(s).`);
-  process.exit(0);
 }
 
 main().catch((e) => {
   console.error(`\nERRO: ${e instanceof Error ? e.message : String(e)}`);
-  process.exit(1);
+  process.exitCode = 1;
 });

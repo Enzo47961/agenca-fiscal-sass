@@ -10,7 +10,11 @@ import {
   calcularTributosReforma,
 } from "@/lib/fiscal/reforma";
 import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
-import { carregarCClassTribConhecidos } from "./dominio-fiscal";
+import {
+  carregarCClassTribConhecidos,
+  carregarReducaoOficial,
+  correlacaoDoItem,
+} from "./dominio-fiscal";
 
 /**
  * Ponto de entrada da emissão (regra 5 do CLAUDE.md):
@@ -123,7 +127,25 @@ export async function solicitarEmissao(
   // estados e só falharia minutos depois, no motor — com o usuário já fora da
   // tela. Validando na fronteira (regra 19), o erro volta enquanto ele ainda
   // está no formulário e nenhuma nota chega a existir.
-  const declaracao = dados.declaracaoIbsCbs ?? null;
+  // Categoria A da correlação oficial: quando o Anexo VIII correlaciona um
+  // único código ao item de serviço E esse código é `000001` (tributação
+  // integral), o sistema preenche sozinho. Não reivindica benefício nenhum —
+  // é a regra geral do art. 4º da LC 214/2025 —, então não há enquadramento a
+  // presumir. Qualquer outro caso exige escolha de quem emite.
+  //
+  // Só age quando o chamador NÃO declarou nada: declaração explícita sempre
+  // vence o automático.
+  let declaracao = dados.declaracaoIbsCbs ?? null;
+  if (!declaracao) {
+    const correlacao = await correlacaoDoItem(db, dados.codigoServico);
+    if (correlacao.categoria === "automatica" && correlacao.automatica) {
+      declaracao = {
+        cst: correlacao.automatica.cst,
+        cClassTrib: correlacao.automatica.codigo,
+      };
+    }
+  }
+
   if (declaracao) {
     const validacao = validarDeclaracao(declaracao, {
       cClassTribConhecidos: await carregarCClassTribConhecidos(db),
@@ -132,6 +154,42 @@ export async function solicitarEmissao(
       throw new Error(`Grupo IBS/CBS inválido: ${validacao.erros.join("; ")}`);
     }
   }
+
+  // Redução: quando há cClassTrib declarado, quem manda é a tabela oficial, e
+  // não o enum `RegimeIbsCbs`. As RN 104/111/118 do Anexo VI (rejeições
+  // E1543/E1547/E1552) exigem que o percentual informado seja o da tabela;
+  // divergência entre os dois lança em `fatoresReducao`, antes do insert.
+  const reducaoOficial = declaracao
+    ? await carregarReducaoOficial(db, declaracao.cClassTrib)
+    : null;
+
+  // Declarar um cClassTrib COM redução é afirmar enquadramento — a mesma
+  // afirmação que o C7 exige para regime diferenciado, só que dita pelo código
+  // em vez de pelo enum. Exigir a confirmação num caminho e não no outro
+  // deixaria a porta dos fundos aberta: bastaria escolher `200029` mantendo o
+  // regime em "padrao" para obter 60% de redução sem ninguém assumir nada.
+  //
+  // Reaproveita as colunas do C7 de propósito: a pergunta é a mesma, e o
+  // registro precisa ser um só para a auditoria fazer sentido.
+  const reducaoDeclarada =
+    (reducaoOficial?.ibs ?? 0) > 0 || (reducaoOficial?.cbs ?? 0) > 0;
+
+  if (reducaoDeclarada && !dados.confirmacaoRegimeDiferenciado) {
+    throw new Error(
+      `O código ${declaracao?.cClassTrib} tem redução de alíquota e exige confirmação ` +
+        "explícita de que a atividade se enquadra. A correlação oficial diz que o código " +
+        "se relaciona a este serviço; ela não diz que a sua empresa pode usá-lo.",
+    );
+  }
+  if (reducaoDeclarada && !dados.confirmadoPorUserId) {
+    throw new Error(
+      "Confirmação de enquadramento sem usuário identificado. Isso é bug de quem " +
+        "chamou: o id vem da sessão, nunca do formulário.",
+    );
+  }
+
+  /** Houve afirmação de enquadramento — pelo regime, pelo código, ou pelos dois. */
+  const afirmouEnquadramento = dados.regimeIbsCbs !== "padrao" || reducaoDeclarada;
 
   // Base de cálculo do IBS/CBS (B7) — a fórmula da NT-009, aplicada ANTES do
   // destaque. Antes daqui o sistema usava o valor BRUTO como base, o que
@@ -161,6 +219,7 @@ export async function solicitarEmissao(
     baseCentavos: base.baseCentavos,
     competencia: dados.competencia,
     regime: dados.regimeIbsCbs,
+    reducaoOficial,
   });
 
   const { data: nota, error } = await db
@@ -195,9 +254,8 @@ export async function solicitarEmissao(
       // O schema já garante que, fora do padrão, a confirmação existe e tem
       // autor; o CHECK do banco recusa a combinação de qualquer forma. O
       // `?? null` aqui é para o compilador, não para o caso real.
-      regime_confirmado_por:
-        dados.regimeIbsCbs === "padrao" ? null : (dados.confirmadoPorUserId ?? null),
-      regime_confirmado_em: dados.regimeIbsCbs === "padrao" ? null : new Date().toISOString(),
+      regime_confirmado_por: afirmouEnquadramento ? (dados.confirmadoPorUserId ?? null) : null,
+      regime_confirmado_em: afirmouEnquadramento ? new Date().toISOString() : null,
       ibscbs_base_centavos: base.baseCentavos,
       desconto_incondicionado_centavos: base.descontoIncondicionadoCentavos,
       ajuste_base_centavos: base.ajusteBaseCentavos,
