@@ -70,8 +70,15 @@ Autorizado por ele explicitamente, depois de a restauração ter sido verificada
 | `c69e105` | 0008, 0010–0013, 0015 | Aplicação real do código que faltava (ver §3.1) |
 | `d3728ee` | — | B7 segunda metade: vBC ligado ao fluxo, da tela ao provider |
 | `13c62fd` | 0014 | M4 chaves do Inngest · M3 escape HTML no e-mail · M1 magic bytes A1 · A11 textos |
+| `0b63b9d` | — | Correção deste handoff |
+| `89bffb0` | — | A1: CI rodando a DoD a cada push e PR |
+| `bccd178` | — | C7 confirmação de regime diferenciado · A7 aviso do NBS |
+| `b3683f7` | — | C7: persistência do registro da confirmação |
+| `6bf3945` | — | A6: regime de apuração no Simples, com vigência |
 
-**DoD no último commit:** typecheck OK · lint OK · **277 testes** em 19 arquivos · build OK.
+**DoD no último commit:** typecheck OK · lint OK · **298 testes** em 19 arquivos · build OK.
+
+**Nada foi empurrado.** Todos estes commits estão só em `main` local.
 
 ### 3.1. ⚠️ Por que a tabela acima foi reescrita — leia antes de confiar em qualquer handoff
 
@@ -315,17 +322,36 @@ errado em vez de sair sem ele. `valor_servicos` segue sendo o vServ **bruto**, q
 que aquele campo pede; não trocar pelo vBC. Confirmar na homologação, junto da mesma
 dúvida sobre o campo do CST.
 
-### 🟠 Alto — não dependem de credencial externa
+**A1 — CI/CD** (`89bffb0`). `.github/workflows/ci.yml` roda a DoD a cada push e PR.
+Ressalva registrada no próprio arquivo: garante que todo commit em `main` é verde, mas
+**não** teria pego o incidente da §3.1 — o código antigo também compilava e passava.
 
-- **A6 — `simples_por_fora` é decorativo.** Verificado: aparece em schema, CRUD e UI,
-  **nunca em cálculo**. Precisa de efeito real de crédito + data de opção.
-- **A7 — obrigatoriedade do NBS por regime.** *Incerteza normativa: perguntar ao usuário
-  ou marcar pendência.* Hoje é opcional para todos.
-- **A1 — CI/CD.** `.github/workflows` não existe. Nada impede um commit quebrado.
-- **C7 — elegibilidade de regime diferenciado. 100% aberto.** Qualquer operador marca
-  "redução de 60%" para qualquer nota. **Decisão contábil**, não técnica.
+**C7 — confirmação de regime diferenciado** (`bccd178` + `b3683f7`). Decisão do usuário:
+confirmação explícita com registro, em vez de amarrar a CNAE. **Não valida
+elegibilidade** — isso exige a correlação atividade ↔ regime, que é decisão contábil e
+segue aberta. O que faz é tirar o "cliquei sem ver" e gravar quem confirmou e quando.
+
+**A7 — NBS** (`bccd178`). Decisão do usuário: continua **opcional para todos**, com aviso
+na tela para lucro presumido/real. As fontes divergem, e exigir o campo com base em fonte
+não confirmada bloquearia emissão legítima de quem não tem o código em mãos.
+
+**A6 — regime de apuração no Simples** (`6bf3945`). O booleano `simples_por_fora` foi
+**removido**: não representava o que a NT-009 pede (regime de apuração POR TRIBUTO, com o
+caso híbrido CBS-SN/IBS-regular). Agora são `situacao_simples_nacional` +
+`regime_apuracao_ibscbs_sn` + `data_opcao_regime_regular`, e `intencaoDeColunas()` faz a
+intenção chegar ao provider recortada pela vigência — nota anterior à opção sai como
+`ambos_pelo_sn`. **O cálculo do crédito ao tomador NÃO foi feito**, de propósito: a regra
+de crédito do Simples sob a LC 214/2025 é decisão contábil. A tela deixou de prometê-lo.
+
+### 🟠 Alto — o que resta
+
 - **UI do grupo IBSCBS** no formulário de nota, usando a view `cclasstrib_nfse` para
-  oferecer só os 71 códigos válidos (e não os 164).
+  oferecer só os 71 códigos válidos (e não os 164). **Atenção antes de codificar:**
+  `PENDENCIAS_C5` registra que o mapeamento negócio → CST/cClassTrib é **decisão
+  contábil**. Uma lista de 71 códigos sem orientação de escolha recria, em escala maior,
+  exatamente o problema que o C7 acabou de mitigar — só que com 71 opções em vez de 5.
+- **Correlação atividade ↔ regime diferenciado** (a outra metade do C7) e **regra de
+  crédito do Simples** (a outra metade do A6). As duas são decisão contábil, não técnica.
 
 ### 🟡 Médio
 
@@ -402,15 +428,20 @@ sem ele, a base de quem trabalha com reembolso/repasse sai errada por construç�
 
 ## 8. Como continuar
 
-Os quatro primeiros passos da versão anterior foram concluídos em 10/08/2026: estado
-verificado (§3.1), `database.ts` destravado (§4), B7 fechado (`d3728ee`) e 0014
-recuperado (`13c62fd`). O que resta, em ordem:
+Toda a lista da versão anterior foi concluída em 10/08/2026: estado verificado (§3.1),
+`database.ts` destravado (§4), B7 (`d3728ee`), 0014 recuperado (`13c62fd`), A1
+(`89bffb0`), C7 (`bccd178`+`b3683f7`), A7 (`bccd178`) e A6 (`6bf3945`).
 
-1. **A6 — `simples_por_fora` com efeito real.** Verificado: aparece em schema, CRUD e UI,
-   **nunca em cálculo**. Precisa de efeito de crédito + data de opção.
-2. **A1 — CI/CD.** `.github/workflows` não existe. É a causa-raiz sistêmica: um workflow
-   rodando `typecheck && lint && test && build` teria barrado o commit de mensagem
-   enganosa da §3.1 no dia em que ele foi feito.
-3. **UI do grupo IBSCBS** no formulário de nota, usando a view `cclasstrib_nfse` para
-   oferecer só os 71 códigos válidos (e não os 164).
-4. **A7 e C7 exigem decisão do usuário** — perguntar, não escolher sozinho.
+O que resta está em §6. A regra que não muda: **A7 e C7 mostraram que perguntar custa uma
+mensagem e escolher errado custa uma migration.** Os itens que sobraram — mapeamento
+negócio → cClassTrib, correlação atividade ↔ regime, regra de crédito do Simples — são
+todos decisão contábil. Perguntar, não escolher sozinho.
+
+### Migrations que exigem `db reset` + regeneração de tipos
+
+Quando uma migration mexe em COLUNA, o código que escreve nela só typecheca depois que o
+usuário roda os dois comandos da §4. Nesta sessão isso aconteceu duas vezes (C7 e A6) e o
+fluxo que funcionou foi: escrever a migration → pedir os dois comandos → **verificar** o
+BOM e as colunas em `database.ts` → só então escrever o código. Não commitar migration
+que derruba coluna separada do código que parava de usá-la: deixa `main` num estado em
+que o código contradiz o banco.
