@@ -10,7 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { resolverProvider } from "@/lib/fiscal/providers";
 import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
 import { declaracaoDeColunas } from "@/lib/fiscal/ibscbs";
-import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
+import { baseDeColunas, type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 import {
   FiscalErrorPermanent,
   isFiscalError,
@@ -140,6 +140,11 @@ export const emitirNfse = inngest.createFunction(
                   // Grupo IBSCBS gravado na criação da nota. Reconstruído a
                   // partir das colunas — nunca inventado aqui.
                   declaracao: declaracaoDeColunas(contexto),
+                  // vBC gravado na criação. Mesma regra da declaração: vem das
+                  // colunas, nunca é recalculado aqui — recalcular no motor
+                  // faria a nota emitida divergir da nota gravada se a fórmula
+                  // ou as alíquotas mudassem entre a criação e o retry.
+                  baseCalculo: baseDeColunas(contexto),
                   regime: contexto.regime_ibscbs as RegimeIbsCbs,
                   cbsAliquota: Number(contexto.cbs_aliquota),
                   ibsAliquota: Number(contexto.ibs_aliquota),

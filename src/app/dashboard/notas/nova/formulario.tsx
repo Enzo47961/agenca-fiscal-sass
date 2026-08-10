@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { CheckCircle2, HelpCircle, Loader2, SendHorizonal } from "lucide-react";
 import { emitirNotaAction, type EmissaoResult } from "./actions";
-import { REGIME_IBSCBS_LABEL } from "@/lib/fiscal/reforma";
+import { REGIME_IBSCBS_LABEL, TIPO_AJUSTE_BASE_LABEL } from "@/lib/fiscal/reforma";
 
 const inputClasses =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500";
@@ -135,6 +135,72 @@ export function FormularioEmissao({ clientes }: { clientes: Array<{ id: string; 
           </select>
           <Ajuda>CBS/IBS são calculados automaticamente conforme o regime e a competência.</Ajuda>
         </label>
+
+        {/*
+          Deduções da base (NT-009). Recolhidas num <details> porque a nota
+          comum não tem nenhuma delas: quem não abrir isto emite com
+          base = valor − ISSQN, que é o caso normal do prestador de serviço.
+          Deixar os seis campos sempre visíveis sugeriria que precisam ser
+          preenchidos.
+        */}
+        <details className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium text-slate-700">
+            Deduções da base de cálculo (opcional)
+          </summary>
+
+          <p className="mt-2 text-xs text-slate-500">
+            A base do IBS/CBS é o valor do serviço menos estas deduções — não o valor bruto.
+            Deixe em branco o que não se aplica.
+          </p>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">Desconto incondicionado (R$)</span>
+              <input name="descontoIncondicionado" inputMode="decimal" placeholder="0,00" className={inputClasses} />
+              <Ajuda>Só o incondicionado — desconto por pagamento antecipado não entra.</Ajuda>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">ISSQN (R$)</span>
+              <input name="issqn" inputMode="decimal" placeholder="calculado pela alíquota" className={inputClasses} />
+              <Ajuda>
+                Em branco, é calculado como (valor − desconto) × alíquota de ISS. Informe
+                <strong> 0</strong> se não há ISSQN a deduzir — é diferente de deixar vazio.
+              </Ajuda>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">Ajuste de base (R$)</span>
+              <input name="ajusteBase" inputMode="decimal" placeholder="0,00" className={inputClasses} />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">Tipo do ajuste</span>
+              <select name="tipoAjusteBase" defaultValue="" className={inputClasses}>
+                <option value="">Nenhum</option>
+                {Object.entries(TIPO_AJUSTE_BASE_LABEL).map(([valor, rotulo]) => (
+                  <option key={valor} value={valor}>
+                    {rotulo}
+                  </option>
+                ))}
+              </select>
+              <Ajuda>Obrigatório quando há ajuste: cada tipo sai numa tag diferente da nota.</Ajuda>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">PIS (R$)</span>
+              <input name="pis" inputMode="decimal" placeholder="0,00" className={inputClasses} />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">COFINS (R$)</span>
+              <input name="cofins" inputMode="decimal" placeholder="0,00" className={inputClasses} />
+              <Ajuda>
+                PIS e COFINS só são dedutíveis até 2026 — os tributos deixam de existir depois.
+              </Ajuda>
+            </label>
+          </div>
+        </details>
       </div>
 
       {resultado && !resultado.ok && (

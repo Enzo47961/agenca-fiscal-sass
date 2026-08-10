@@ -3,7 +3,12 @@ import { z } from "zod";
 import { inngest } from "@/inngest/client";
 import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
 import { type Database } from "@/types/database";
-import { REGIME_IBSCBS, calcularTributosReforma } from "@/lib/fiscal/reforma";
+import {
+  REGIME_IBSCBS,
+  TIPO_AJUSTE_BASE,
+  calcularBaseIbsCbs,
+  calcularTributosReforma,
+} from "@/lib/fiscal/reforma";
 import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
 import { carregarCClassTribConhecidos } from "./dominio-fiscal";
 
@@ -29,6 +34,25 @@ export const solicitarEmissaoSchema = z.object({
   // Split payment: preenchidos só quando a liquidação retiver CBS/IBS na fonte
   valorLiquidoCentavos: z.number().int().nonnegative().nullish(),
   splitRetidoCentavos: z.number().int().nonnegative().nullish(),
+  /**
+   * Componentes da base de cálculo do IBS/CBS (NT SE/CGNFS-e 009/2026).
+   *
+   * Todos opcionais e com default zero: a nota mais simples — sem desconto,
+   * sem ajuste, sem PIS/COFINS destacados — continua sendo um formulário de
+   * quatro campos. Quem não informa nada cai na base = vServ − vISSQN, que é o
+   * caso comum do prestador de serviço.
+   */
+  descontoIncondicionadoCentavos: z.number().int().nonnegative().default(0),
+  ajusteBaseCentavos: z.number().int().nonnegative().default(0),
+  tipoAjusteBase: z.enum(TIPO_AJUSTE_BASE).nullish(),
+  /**
+   * vISSQN. OMITIR é diferente de informar ZERO: omitido, o valor é derivado de
+   * `(vServ − descIncond) × aliquotaIss`; zero explícito significa "não há ISSQN
+   * a deduzir" e é respeitado como tal.
+   */
+  issqnCentavos: z.number().int().nonnegative().nullish(),
+  pisCentavos: z.number().int().nonnegative().default(0),
+  cofinsCentavos: z.number().int().nonnegative().default(0),
   /**
    * Grupo IBSCBS da DPS (CST, cClassTrib e subgrupos condicionais).
    * Opcional: não há data confirmada de obrigatoriedade de preenchimento do
@@ -70,9 +94,32 @@ export async function solicitarEmissao(
     }
   }
 
-  // Destaque de CBS/IBS calculado na criação, a partir do valor, competência e regime.
+  // Base de cálculo do IBS/CBS (B7) — a fórmula da NT-009, aplicada ANTES do
+  // destaque. Antes daqui o sistema usava o valor BRUTO como base, o que
+  // superestima o tributo destacado; em 2026 isso é um número errado na nota,
+  // a partir de 2027 é recolhimento a maior.
+  //
+  // Erro aqui (base negativa, PIS/COFINS reivindicado depois de 2026, ajuste
+  // sem tipo) sobe como exceção e nenhuma nota chega a ser criada — é a mesma
+  // escolha da validação do grupo IBSCBS logo acima: falhar na fronteira, com
+  // o usuário ainda no formulário.
+  const base = calcularBaseIbsCbs({
+    valorServicoCentavos: dados.valorServicoCentavos,
+    descontoIncondicionadoCentavos: dados.descontoIncondicionadoCentavos,
+    ajusteBaseCentavos: dados.ajusteBaseCentavos,
+    tipoAjusteBase: dados.tipoAjusteBase ?? null,
+    // `?? undefined` de propósito: `null` do formulário significa "não
+    // informado" e precisa chegar como ausência para a derivação acontecer.
+    issqnCentavos: dados.issqnCentavos ?? undefined,
+    aliquotaIss: dados.aliquotaIss,
+    pisCentavos: dados.pisCentavos,
+    cofinsCentavos: dados.cofinsCentavos,
+    competencia: dados.competencia,
+  });
+
+  // Destaque de CBS/IBS sobre o vBC — nunca sobre o bruto.
   const tributos = calcularTributosReforma({
-    baseCentavos: dados.valorServicoCentavos,
+    baseCentavos: base.baseCentavos,
     competencia: dados.competencia,
     regime: dados.regimeIbsCbs,
   });
@@ -96,6 +143,18 @@ export async function solicitarEmissao(
       ibs_valor_centavos: tributos.ibsValorCentavos,
       valor_liquido_centavos: dados.valorLiquidoCentavos ?? null,
       split_retido_centavos: dados.splitRetidoCentavos ?? null,
+      // Base do IBS/CBS: o resultado E cada termo que o produziu. Guardar só o
+      // total tornaria impossível provar como ele foi obtido depois que a
+      // fórmula ou os dados de entrada mudarem. `issqn_centavos` grava o valor
+      // EFETIVAMENTE usado — derivado ou informado —, para que a base seja
+      // reproduzível só com o que está nesta linha.
+      ibscbs_base_centavos: base.baseCentavos,
+      desconto_incondicionado_centavos: base.descontoIncondicionadoCentavos,
+      ajuste_base_centavos: base.ajusteBaseCentavos,
+      ajuste_base_tipo: base.tipoAjusteBase,
+      issqn_centavos: base.issqnCentavos,
+      pis_centavos: base.pisCentavos,
+      cofins_centavos: base.cofinsCentavos,
       // Grupo IBSCBS — os CHECKs e a FK composta do banco são a segunda
       // camada: mesmo que a validação acima falhe por bug, o insert é recusado.
       ibscbs_cst: declaracao?.cst ?? null,

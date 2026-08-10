@@ -3,7 +3,7 @@
  * O motor de retry NÃO conhece providers concretos — só esta interface
  * e as duas classes de erro (regras 8 e 21 do CLAUDE.md).
  */
-import { type RegimeIbsCbs } from "./reforma";
+import { type BaseIbsCbsPersistida, type RegimeIbsCbs } from "./reforma";
 import {
   type DeclaracaoTributariaIBSCBS,
   type IntencaoRegimeTributario,
@@ -105,6 +105,22 @@ export interface EmitirNfseInput {
       declaracao?: DeclaracaoTributariaIBSCBS | null;
       /** Contexto do Simples Nacional (opSimpNac / regApIBSCBSSN, NT-009). */
       intencao?: IntencaoRegimeTributario | null;
+      /**
+       * vBC do IBS/CBS e os termos que o produziram (NT SE/CGNFS-e 009/2026).
+       *
+       * NÃO confundir com `servico.valorCentavos`: aquele é o vServ bruto, este
+       * é o bruto MENOS descontos incondicionados, ajuste de base, ISSQN e —
+       * só até 2026 — PIS/COFINS. Um provider que usar o bruto onde a DPS pede
+       * o vBC superestima a base e, a partir de 2027, o recolhimento.
+       *
+       * Os componentes vêm junto do total de propósito: a base é o número que
+       * o Fisco confere, e mandar só o resultado deixaria o provider sem como
+       * preencher os campos individuais da DPS.
+       *
+       * `null` = nota criada antes da fórmula existir (`ibscbs_base_centavos`
+       * NULL no banco). Nesse caso o provider NÃO deve substituir pelo bruto.
+       */
+      baseCalculo?: BaseIbsCbsPersistida | null;
     };
   };
 }

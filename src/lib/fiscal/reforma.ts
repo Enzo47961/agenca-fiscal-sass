@@ -216,6 +216,12 @@ export const ULTIMO_ANO_PIS_COFINS = 2026;
 export const TIPO_AJUSTE_BASE = ["ibscbs", "loc_imoveis"] as const;
 export type TipoAjusteBase = (typeof TIPO_AJUSTE_BASE)[number];
 
+/** Rótulos legíveis para UI — o nome da tag não diz nada a quem preenche. */
+export const TIPO_AJUSTE_BASE_LABEL: Record<TipoAjusteBase, string> = {
+  ibscbs: "Reembolso, repasse ou glosa (vCalcAjusteBCIBSCBS)",
+  loc_imoveis: "Locação de bem imóvel — subitem 99.03 (vCalcAjusteBCLocImoveis)",
+};
+
 export interface ComponentesBaseIbsCbs {
   /** vServ — valor bruto do serviço. */
   valorServicoCentavos: Centavos;
@@ -347,6 +353,61 @@ export function calcularBaseIbsCbs(
     pisCentavos,
     cofinsCentavos,
     deduzPisCofins,
+  };
+}
+
+/**
+ * A base como ela fica GRAVADA na nota — os termos da fórmula, sem os campos
+ * que são apenas informação do momento do cálculo (`issqnDerivado`,
+ * `deduzPisCofins`). Os dois se redescobrem a partir da competência e do que
+ * está gravado, então persistí-los seria duplicar estado.
+ */
+export interface BaseIbsCbsPersistida {
+  baseCentavos: Centavos;
+  valorServicoCentavos: Centavos;
+  descontoIncondicionadoCentavos: Centavos;
+  ajusteBaseCentavos: Centavos;
+  tipoAjusteBase: TipoAjusteBase | null;
+  issqnCentavos: Centavos;
+  pisCentavos: Centavos;
+  cofinsCentavos: Centavos;
+}
+
+/**
+ * Reconstrói a base a partir das colunas de `notas_fiscais`.
+ *
+ * Existe pelo mesmo motivo que `declaracaoDeColunas()` no grupo IBSCBS: ler
+ * colunas e remontar o objeto de domínio é lógica de domínio, e lógica de
+ * domínio não mora dentro da função Inngest — lá ela não teria teste e viraria
+ * ponte de falha silenciosa.
+ *
+ * Devolve `null` quando `ibscbs_base_centavos` é NULL, que é como o banco marca
+ * "nota criada antes da fórmula existir". NUNCA cair para
+ * `valor_servico_centavos` nesse caso: usar o bruto como base é exatamente o
+ * erro que a migration 20260806140000 foi escrita para corrigir, e o fallback
+ * silencioso o reintroduziria justamente nas notas antigas.
+ */
+export function baseDeColunas(nota: {
+  ibscbs_base_centavos: number | null;
+  valor_servico_centavos: number;
+  desconto_incondicionado_centavos: number;
+  ajuste_base_centavos: number;
+  ajuste_base_tipo: TipoAjusteBase | null;
+  issqn_centavos: number;
+  pis_centavos: number;
+  cofins_centavos: number;
+}): BaseIbsCbsPersistida | null {
+  if (nota.ibscbs_base_centavos === null) return null;
+
+  return {
+    baseCentavos: nota.ibscbs_base_centavos,
+    valorServicoCentavos: nota.valor_servico_centavos,
+    descontoIncondicionadoCentavos: nota.desconto_incondicionado_centavos,
+    ajusteBaseCentavos: nota.ajuste_base_centavos,
+    tipoAjusteBase: nota.ajuste_base_tipo,
+    issqnCentavos: nota.issqn_centavos,
+    pisCentavos: nota.pis_centavos,
+    cofinsCentavos: nota.cofins_centavos,
   };
 }
 

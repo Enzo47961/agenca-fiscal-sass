@@ -442,6 +442,14 @@ export class FocusNfeProvider implements FiscalProvider {
    * Quando a declaração é `null`, nada da reforma é enviado e a nota sai com o
    * tratamento padrão do município. É o estado normal hoje: não há data
    * confirmada de obrigatoriedade de preenchimento do grupo na NFS-e.
+   *
+   * PENDÊNCIA — `servico.reforma.baseCalculo` (o vBC da NT-009) CHEGA aqui mas
+   * NÃO é enviado. Os nomes dos campos de desconto incondicionado, ajuste de
+   * base e vBC na API da Focus não estão na documentação a que tivemos acesso,
+   * e inventar nome de campo é pior que omitir: a nota sairia com o valor no
+   * lugar errado em vez de sair sem ele, e o erro só apareceria na apuração.
+   * `valor_servicos` segue sendo o vServ BRUTO, que é o que aquele campo pede —
+   * não trocar pelo vBC. Confirmar o mapeamento na homologação.
    */
   private montarPayload(input: EmitirNfseInput): Record<string, unknown> {
     const { prestador, tomador, servico } = input;

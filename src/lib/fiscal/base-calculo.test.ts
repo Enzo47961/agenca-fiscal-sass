@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  baseDeColunas,
   calcularBaseIbsCbs,
   calcularTributosReforma,
   ULTIMO_ANO_PIS_COFINS,
@@ -246,5 +247,60 @@ describe("base correta x base bruta — efeito no tributo", () => {
     expect(bruta.cbsValorCentavos).toBe(900); // 0,9% de 1.000,00
     expect(correta.cbsValorCentavos).toBe(855); // 0,9% de 950,00
     expect(correta.cbsValorCentavos).toBeLessThan(bruta.cbsValorCentavos);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Volta do banco: reconstrução da base a partir das colunas gravadas.
+// ---------------------------------------------------------------------------
+describe("baseDeColunas", () => {
+  const colunas = {
+    ibscbs_base_centavos: 71_250,
+    valor_servico_centavos: 100_000,
+    desconto_incondicionado_centavos: 10_000,
+    ajuste_base_centavos: 5_000,
+    ajuste_base_tipo: "ibscbs" as const,
+    issqn_centavos: 4_500,
+    pis_centavos: 1_650,
+    cofins_centavos: 7_600,
+  };
+
+  it("remonta o vBC e todos os termos", () => {
+    expect(baseDeColunas(colunas)).toEqual({
+      baseCentavos: 71_250,
+      valorServicoCentavos: 100_000,
+      descontoIncondicionadoCentavos: 10_000,
+      ajusteBaseCentavos: 5_000,
+      tipoAjusteBase: "ibscbs",
+      issqnCentavos: 4_500,
+      pisCentavos: 1_650,
+      cofinsCentavos: 7_600,
+    });
+  });
+
+  it("o que volta do banco reproduz a fórmula — os termos fecham no total", () => {
+    const b = baseDeColunas(colunas);
+    const soma =
+      b!.valorServicoCentavos -
+      b!.descontoIncondicionadoCentavos -
+      b!.ajusteBaseCentavos -
+      b!.issqnCentavos -
+      b!.pisCentavos -
+      b!.cofinsCentavos;
+    expect(soma).toBe(b!.baseCentavos);
+  });
+
+  it("nota anterior à fórmula devolve null — NUNCA o valor bruto", () => {
+    // Cair para valor_servico_centavos aqui reintroduziria, só nas notas
+    // antigas, exatamente o erro que o B7 corrigiu.
+    const antiga = baseDeColunas({ ...colunas, ibscbs_base_centavos: null });
+    expect(antiga).toBeNull();
+  });
+
+  it("base zero é base, não ausência de base", () => {
+    // Serviço inteiramente consumido pelas deduções tem vBC 0 e continua sendo
+    // uma nota com base calculada — `?? null` no lugar errado a trataria como
+    // nota antiga.
+    expect(baseDeColunas({ ...colunas, ibscbs_base_centavos: 0 })?.baseCentavos).toBe(0);
   });
 });

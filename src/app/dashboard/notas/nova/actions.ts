@@ -10,6 +10,22 @@ export interface EmissaoResult {
 }
 
 /**
+ * Reais digitados ("1.500,00") → centavos inteiros (regra 15).
+ *
+ * Campo VAZIO devolve `undefined`, não zero. A diferença importa: no ISSQN,
+ * ausência manda derivar pela alíquota e zero manda não deduzir nada. Achatar
+ * os dois em zero mudaria a base de cálculo sem ninguém pedir.
+ */
+function reaisParaCentavos(valor: FormDataEntryValue | null): number | undefined {
+  const texto = String(valor ?? "").trim();
+  if (texto === "") return undefined;
+  const numero = Number(texto.replace(/\./g, "").replace(",", "."));
+  // NaN vira -1 para que o schema recuse com mensagem de campo, em vez de
+  // virar 0 em silêncio e emitir uma nota com base errada.
+  return Number.isFinite(numero) ? Math.round(numero * 100) : -1;
+}
+
+/**
  * Emissão manual: cria a nota `pendente` e dispara o motor Inngest,
  * sem passar pelo fluxo de cobrança do Asaas (regra 5: nunca síncrono).
  */
@@ -20,21 +36,27 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     return { ok: false, erro: "Sessão expirada. Faça login novamente." };
   }
 
-  // Reais ("1500,00") → centavos inteiros na fronteira (regra 15)
-  const valorBruto = String(formData.get("valor") ?? "").replace(/\./g, "").replace(",", ".");
-  const valorCentavos = Math.round(Number(valorBruto) * 100);
+  const valorCentavos = reaisParaCentavos(formData.get("valor"));
 
   const parse = solicitarEmissaoSchema.safeParse({
     empresaId: estado.empresaId, // SEMPRE da sessão (regra 3)
     clienteId: formData.get("clienteId"),
     descricaoServico: formData.get("descricaoServico"),
     codigoServico: String(formData.get("codigoServico") ?? "").trim().replace(",", "."),
-    valorServicoCentavos: Number.isFinite(valorCentavos) ? valorCentavos : -1,
+    valorServicoCentavos: valorCentavos ?? -1,
     aliquotaIss: Number(formData.get("aliquotaIss") ?? "0") / 100, // % → fração
     issRetido: formData.get("issRetido") === "on",
     competencia: new Date().toISOString().slice(0, 10),
     codigoNbs: (formData.get("codigoNbs") as string | null)?.trim() || undefined,
     regimeIbsCbs: (formData.get("regimeIbsCbs") as string | null) || undefined,
+    // Componentes da base de cálculo (B7). Campo em branco → `undefined`, que
+    // o schema resolve: zero nos que têm default, derivação no ISSQN.
+    descontoIncondicionadoCentavos: reaisParaCentavos(formData.get("descontoIncondicionado")),
+    ajusteBaseCentavos: reaisParaCentavos(formData.get("ajusteBase")),
+    tipoAjusteBase: (formData.get("tipoAjusteBase") as string | null) || undefined,
+    issqnCentavos: reaisParaCentavos(formData.get("issqn")),
+    pisCentavos: reaisParaCentavos(formData.get("pis")),
+    cofinsCentavos: reaisParaCentavos(formData.get("cofins")),
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

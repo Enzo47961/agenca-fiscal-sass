@@ -418,9 +418,19 @@ export const PENDENCIAS_C5 = [
     "`vCalcReeRepRes` renomeado para `vCalcAjusteBCIBSCBS` e a alternativa " +
     "`vCalcAjusteBCLocImoveis` acrescentada, para locação de imóveis). " +
     "Implementada em calcularBaseIbsCbs() na redação da NT-009.",
-  "A fórmula do vBC está implementada e testada, mas NENHUM formulário coleta " +
-    "desconto incondicionado, ajuste de base, PIS e COFINS ainda. Na prática " +
-    "esses termos chegam zerados e só o ISSQN é de fato deduzido.",
+  // RESOLVIDA em 10/08/2026 (B7, segunda metade). Mantida no array em vez de
+  // apagada, pelo mesmo motivo da anterior: registrar o que mudou.
+  "RESOLVIDA — o vBC está LIGADO ao fluxo: solicitarEmissaoSchema recebe os " +
+    "seis componentes, solicitarEmissao chama calcularBaseIbsCbs() e grava " +
+    "resultado e termos nas colunas, o formulário de emissão manual os coleta " +
+    "e o motor manda a base ao provider via baseCalculo. O destaque de CBS/IBS " +
+    "passou a incidir sobre o vBC, não mais sobre o valor bruto.",
+  "O vBC chega ao provider mas NÃO é enviado à Focus: os nomes dos campos de " +
+    "desconto incondicionado, ajuste de base e vBC na API deles não estão na " +
+    "documentação a que tivemos acesso, e inventar nome de campo é pior que " +
+    "omitir — a nota sairia com dado no lugar errado em vez de sair sem ele. " +
+    "Confirmar com a Focus na homologação (mesma pendência do CST, que também " +
+    "não tem campo próprio documentado).",
   "As alíquotas de 2027+ NÃO estão fixadas por Resolução do Senado. " +
     "aliquotasReferencia() agora lança AliquotaNaoFixadaError nesses anos, em " +
     "vez de devolver o par de teste de 2026 — mas isso significa que a emissão " +

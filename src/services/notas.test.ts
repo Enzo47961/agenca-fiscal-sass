@@ -3,7 +3,8 @@ import { describe, it, expect, vi } from "vitest";
 // Evita instanciar o cliente Inngest real (sem rede) ao importar o módulo.
 vi.mock("@/inngest/client", () => ({ inngest: { send: vi.fn() } }));
 
-import { solicitarEmissaoSchema } from "@/services/notas";
+import { solicitarEmissao, solicitarEmissaoSchema } from "@/services/notas";
+import { fakeSupabase, type FakeCtx } from "@/test-utils/fake-supabase";
 
 const base = {
   empresaId: "22222222-2222-2222-2222-222222222222",
@@ -63,5 +64,146 @@ describe("solicitarEmissaoSchema — grupo IBSCBS", () => {
     expect(() =>
       solicitarEmissaoSchema.parse({ ...base, declaracaoIbsCbs: { cst: "200", cClassTrib: "2000" } }),
     ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B7 — base de cálculo LIGADA ao fluxo de criação da nota.
+//
+// Os testes abaixo olham o PAYLOAD do insert, não o retorno: o retorno é só o
+// id, e uma implementação que calculasse a base certinho e esquecesse de
+// gravá-la passaria num teste de retorno. É exatamente o modo de falha que o
+// B7 tinha antes — a fórmula existia, testada, e ninguém a chamava.
+// ---------------------------------------------------------------------------
+
+/** Captura o payload do insert em `notas_fiscais`. */
+function dbCapturandoInsert(): { db: ReturnType<typeof fakeSupabase>; payload: () => Record<string, unknown> } {
+  let capturado: Record<string, unknown> = {};
+  const db = fakeSupabase((ctx: FakeCtx) => {
+    if (ctx.op === "insert") {
+      capturado = ctx.payload as Record<string, unknown>;
+      return {
+        data: { id: "44444444-4444-4444-4444-444444444444", empresa_id: base.empresaId },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  });
+  return { db, payload: () => capturado };
+}
+
+describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
+  it("grava o vBC e cada termo da fórmula nas colunas", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, {
+      ...base,
+      valorServicoCentavos: 100_000, // R$ 1.000,00
+      descontoIncondicionadoCentavos: 10_000,
+      ajusteBaseCentavos: 5_000,
+      tipoAjusteBase: "ibscbs",
+      issqnCentavos: 4_500,
+      pisCentavos: 1_650,
+      cofinsCentavos: 7_600,
+    });
+
+    const p = payload();
+    // 100000 − 10000 − 5000 − 4500 − 1650 − 7600
+    expect(p.ibscbs_base_centavos).toBe(71_250);
+    expect(p.desconto_incondicionado_centavos).toBe(10_000);
+    expect(p.ajuste_base_centavos).toBe(5_000);
+    expect(p.ajuste_base_tipo).toBe("ibscbs");
+    expect(p.issqn_centavos).toBe(4_500);
+    expect(p.pis_centavos).toBe(1_650);
+    expect(p.cofins_centavos).toBe(7_600);
+  });
+
+  it("destaca CBS/IBS sobre o vBC, não sobre o valor bruto", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, {
+      ...base,
+      valorServicoCentavos: 100_000,
+      descontoIncondicionadoCentavos: 20_000,
+      issqnCentavos: 0,
+      competencia: "2026-07-18",
+    });
+
+    const p = payload();
+    expect(p.ibscbs_base_centavos).toBe(80_000);
+    // CBS 0,9% da fase de teste: sobre 80.000 dá 720; sobre o bruto daria 900.
+    expect(p.cbs_valor_centavos).toBe(720);
+    expect(p.ibs_valor_centavos).toBe(80); // IBS 0,1%
+  });
+
+  it("deriva o ISSQN quando ele é omitido, e grava o valor derivado", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, {
+      ...base,
+      valorServicoCentavos: 100_000,
+      aliquotaIss: 0.05,
+    });
+
+    const p = payload();
+    expect(p.issqn_centavos).toBe(5_000); // 100.000 × 5%
+    expect(p.ibscbs_base_centavos).toBe(95_000);
+  });
+
+  it("respeita ISSQN zero informado — não é o mesmo que omitir", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, {
+      ...base,
+      valorServicoCentavos: 100_000,
+      aliquotaIss: 0.05,
+      issqnCentavos: 0,
+    });
+
+    const p = payload();
+    expect(p.issqn_centavos).toBe(0);
+    expect(p.ibscbs_base_centavos).toBe(100_000);
+  });
+
+  it("nota sem nenhuma dedução informada continua válida (só o ISSQN derivado)", async () => {
+    const { db, payload } = dbCapturandoInsert();
+
+    await solicitarEmissao(db, base);
+
+    const p = payload();
+    expect(p.desconto_incondicionado_centavos).toBe(0);
+    expect(p.ajuste_base_centavos).toBe(0);
+    expect(p.ajuste_base_tipo).toBeNull();
+    expect(p.pis_centavos).toBe(0);
+    expect(p.cofins_centavos).toBe(0);
+    expect(p.ibscbs_base_centavos).toBe(15_000 - 750); // 15.000 − 5% de ISS
+  });
+
+  it("recusa a nota quando as deduções superam o valor do serviço", async () => {
+    const { db } = dbCapturandoInsert();
+
+    await expect(
+      solicitarEmissao(db, {
+        ...base,
+        valorServicoCentavos: 10_000,
+        descontoIncondicionadoCentavos: 20_000,
+      }),
+    ).rejects.toThrow(/negativa/i);
+  });
+
+  it("recusa ajuste de base sem tipo — não teria tag onde sair", async () => {
+    const { db } = dbCapturandoInsert();
+
+    await expect(
+      solicitarEmissao(db, { ...base, ajusteBaseCentavos: 1_000 }),
+    ).rejects.toThrow(/tipoAjusteBase/);
+  });
+
+  it("recusa PIS/COFINS a partir de 2027 antes de criar a nota", async () => {
+    const { db } = dbCapturandoInsert();
+
+    await expect(
+      solicitarEmissao(db, { ...base, competencia: "2027-01-05", pisCentavos: 100 }),
+    ).rejects.toThrow(/PIS\/COFINS/);
   });
 });
