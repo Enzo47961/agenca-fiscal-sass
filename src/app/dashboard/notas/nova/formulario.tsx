@@ -62,6 +62,13 @@ export function FormularioEmissao({
   const escolhaTemReducao =
     !!opcaoEscolhida && (opcaoEscolhida.percReducaoIbs > 0 || opcaoEscolhida.percReducaoCbs > 0);
 
+  // Onde o par de tributação regular precisa ser digitado. Dois casos, e só
+  // eles: código que a tabela oficial marca como exigente do grupo, e item sem
+  // correlação, onde o usuário digita um código que não conhecemos de antemão.
+  const escolhaExigeTribRegular = !!opcaoEscolhida?.exigeTribRegular;
+  const precisaTribRegular =
+    escolhaExigeTribRegular || correlacao?.categoria === "sem_correlacao";
+
   // A confirmação é uma só, venha a afirmação do regime ou do código escolhido:
   // as duas afirmam enquadramento, e a auditoria precisa de um registro único.
   const regimeDiferenciado = regime !== "padrao" || escolhaTemReducao;
@@ -306,6 +313,45 @@ export function FormularioEmissao({
                     ) : null}
                   </p>
                 ) : null}
+              </label>
+            ) : null}
+
+            {/*
+              Tributação regular, informada à mão. Aparece só nos dois casos em
+              que o sistema não tem como decidir: código que exige o grupo
+              (RN 733/734) e item sem correlação oficial, onde qualquer código
+              pode ser digitado.
+
+              O sistema NÃO sugere e NÃO deduz o par: nenhuma fonte oficial diz
+              qual declarar. Quem informa responde por ele — e o texto de ajuda
+              precisa dizer isso sem rodeio, porque a alternativa é o operador
+              achar que o campo é burocracia.
+            */}
+            {precisaTribRegular ? (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-sm text-slate-600">
+                  cClassTrib da tributação regular{" "}
+                  {escolhaExigeTribRegular ? <span aria-hidden>*</span> : null}
+                </span>
+                <input
+                  name="ibscbsCClassTribReg"
+                  inputMode="numeric"
+                  maxLength={6}
+                  required={escolhaExigeTribRegular}
+                  placeholder="6 dígitos"
+                  className={inputClasses}
+                />
+                <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-900">
+                  <HelpCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span>
+                    <strong>Operação sujeita a regime específico. Consulte seu contador
+                    para informar o código correto.</strong>{" "}
+                    {escolhaExigeTribRegular
+                      ? "Este código exige o grupo de tributação regular: a nota não é emitida sem ele."
+                      : "Preencha apenas se a operação estiver sob regime que exija o grupo."}{" "}
+                    O CST é derivado dos 3 primeiros dígitos.
+                  </span>
+                </p>
               </label>
             ) : null}
 

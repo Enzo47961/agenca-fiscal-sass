@@ -163,25 +163,33 @@ export async function solicitarEmissao(
     ? await carregarAtributosCClassTrib(db, declaracao.cClassTrib)
     : null;
 
-  // FALHA FECHADA. Códigos com `exigeGrupoTributacaoRegular` obrigam o grupo
-  // gTribRegular na DPS (RN 733/734 do Anexo VI, rejeições E0964/E0965), e o
-  // grupo pede o par CSTReg/cClassTribReg — que representa a tributação que
-  // incidiria sem o benefício. Nenhuma fonte oficial que encontramos diz QUAL
-  // par declarar; é enquadramento, não regra técnica.
+  // Códigos com `exigeGrupoTributacaoRegular` obrigam o grupo gTribRegular na
+  // DPS (RN 733/734 do Anexo VI, rejeições E0964/E0965), e o grupo pede o par
+  // CSTReg/cClassTribReg — a tributação que incidiria sem o benefício.
   //
-  // Emitir sem o grupo seria rejeição certa; inventar o par seria pior, porque
-  // a nota passaria e declararia algo que ninguém verificou. Recusamos.
+  // O sistema NÃO deduz esse par: nenhuma fonte oficial diz qual declarar, e é
+  // enquadramento, não regra técnica. Quem informa é quem emite, pelo campo
+  // manual da tela. O que continua barrado é EMITIR SEM ELE — a nota seria
+  // rejeitada, e preencher por conta própria declararia algo que ninguém
+  // verificou.
   //
-  // Alcance real hoje: só 550016 (Reidi) e 550022 (Rehidro) entre os 71 códigos
-  // de NFS-e, e nenhum dos dois é correlacionado pelo Anexo VIII — a UI nunca
-  // os oferece. Esta trava existe para o caminho de API e para o campo livre
-  // da categoria C.
-  if (atributos?.exigeTribRegular) {
+  // Alcance: 550016 (Reidi) e 550022 (Rehidro) entre os 71 códigos de NFS-e,
+  // nenhum correlacionado pelo Anexo VIII.
+  if (atributos?.exigeTribRegular && !declaracao?.tribRegular) {
     throw new Error(
       `O código ${declaracao?.cClassTrib} exige o grupo de tributação regular ` +
-        "(gTribRegular), que ainda não emitimos: falta definir qual CST/cClassTrib de " +
-        "tributação regular declarar, e isso é enquadramento, não regra técnica. " +
-        "Escolha outro código ou fale com seu contador antes de emitir.",
+        "(gTribRegular): informe o CST e o cClassTrib da tributação regular. " +
+        "Esse par não é deduzido pelo sistema — depende do enquadramento da operação, " +
+        "e quem responde por ele é quem emite. Consulte seu contador.",
+    );
+  }
+
+  // O inverso também é erro: informar o grupo onde a tabela diz que ele não
+  // cabe é rejeição E0964, e o dado sairia na nota sem ter onde encaixar.
+  if (declaracao?.tribRegular && atributos && !atributos.exigeTribRegular) {
+    throw new Error(
+      `O código ${declaracao.cClassTrib} NÃO admite o grupo de tributação regular — ` +
+        "informá-lo é rejeição (E0964). Remova o CST/cClassTrib de tributação regular.",
     );
   }
 

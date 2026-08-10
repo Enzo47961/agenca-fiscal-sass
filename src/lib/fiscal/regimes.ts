@@ -41,3 +41,27 @@ export const REGIMES_NBS_SOB_DUVIDA: readonly RegimeTributario[] = [
   "lucro_presumido",
   "lucro_real",
 ];
+
+/**
+ * Prazo para o optante pelo Simples Nacional comunicar se apura IBS/CBS pelo
+ * regime unificado ou pelo regular (art. 41, § 3º da LC 214/2025).
+ *
+ * Último dia de setembro de 2026. Quem não se manifestar **permanece no regime
+ * unificado** — o silêncio tem efeito, e é isso que a tela precisa dizer.
+ *
+ * Fica aqui, e não numa string na tela, porque a data governa três coisas
+ * (mostrar o aviso, mudar o tom depois de vencido, e o texto do prazo) e
+ * espalhar isso é como as três divergem.
+ */
+export const PRAZO_OPCAO_REGIME_APURACAO = "2026-09-30";
+
+/** `true` enquanto ainda dá para se manifestar. */
+export function prazoOpcaoAberto(hoje: Date = new Date()): boolean {
+  return hoje.toISOString().slice(0, 10) <= PRAZO_OPCAO_REGIME_APURACAO;
+}
+
+/** Dias que faltam para o prazo. Negativo depois de vencido. */
+export function diasAtePrazoOpcao(hoje: Date = new Date()): number {
+  const limite = Date.parse(`${PRAZO_OPCAO_REGIME_APURACAO}T23:59:59Z`);
+  return Math.ceil((limite - hoje.getTime()) / 86_400_000);
+}

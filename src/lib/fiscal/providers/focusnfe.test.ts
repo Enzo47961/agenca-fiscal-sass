@@ -669,3 +669,60 @@ describe("componentes da base e Simples Nacional no payload", () => {
     expect(corpo.regime_tributario_simples_nacional).toBeUndefined();
   });
 });
+
+describe("tributacao regular e ajuste de base no payload", () => {
+  const comReforma = (extra: Record<string, unknown>) => ({
+    ...ENTRADA,
+    servico: { ...ENTRADA.servico, reforma: { ...ENTRADA.servico.reforma, ...extra } },
+  });
+
+  it("envia CSTReg e cClassTribReg quando o par foi informado", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        declaracao: {
+          cst: "550",
+          cClassTrib: "550016",
+          tribRegular: { cstRegular: "000", cClassTribRegular: "000001" },
+        },
+      }),
+    );
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    expect(servico.ibs_cbs_situacao_tributaria_regular).toBe("000");
+    expect(servico.ibs_cbs_classificacao_tributaria_regular).toBe("000001");
+  });
+
+  it("sem o par, os campos nao aparecem", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(comReforma({ declaracao: { cst: "200", cClassTrib: "200027" } }));
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    expect(servico.ibs_cbs_situacao_tributaria_regular).toBeUndefined();
+  });
+
+  it("ajuste de base fica FORA enquanto o nome do campo da Focus for desconhecido", async () => {
+    // O valor existe e esta calculado; falta so a chave. Inventar nome faria a
+    // nota sair com o valor onde o Fisco nao le, e o erro so apareceria na
+    // apuracao. Quando a chave chegar, este teste passa a valer ao contrario.
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        baseCalculo: {
+          baseCentavos: 70_000,
+          valorServicoCentavos: 100_000,
+          descontoIncondicionadoCentavos: 0,
+          ajusteBaseCentavos: 30_000,
+          tipoAjusteBase: "ibscbs",
+          issqnCentavos: 0,
+          pisCentavos: 0,
+          cofinsCentavos: 0,
+        },
+      }),
+    );
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    const chaves = Object.keys(servico).filter((k) => /ajuste/i.test(k));
+    expect(chaves).toEqual([]);
+  });
+});

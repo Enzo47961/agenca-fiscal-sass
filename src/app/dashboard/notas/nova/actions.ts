@@ -94,7 +94,17 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
       if (!cClassTrib) return undefined;
       // Os 3 primeiros dígitos do cClassTrib SÃO o CST — regra estrutural da
       // tabela oficial. Derivar evita que a tela mande um par incoerente.
-      return { cst: cClassTrib.slice(0, 3), cClassTrib };
+      const cClassTribRegular = String(formData.get("ibscbsCClassTribReg") ?? "").trim();
+      return {
+        cst: cClassTrib.slice(0, 3),
+        cClassTrib,
+        // Tributação regular: informada à mão por quem emite, pela mesma regra
+        // estrutural. O sistema não deduz o par — ver o comentário em
+        // `solicitarEmissao`.
+        tribRegular: cClassTribRegular
+          ? { cstRegular: cClassTribRegular.slice(0, 3), cClassTribRegular }
+          : undefined,
+      };
     })(),
   });
   if (!parse.success) {

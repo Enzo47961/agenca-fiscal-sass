@@ -17,7 +17,7 @@ export default async function ConfiguracoesPage() {
   const { data: empresa } = await db
     .from("empresas")
     .select(
-      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, situacao_simples_nacional, regime_apuracao_ibscbs_sn, data_opcao_regime_regular, provider_fiscal",
+      "razao_social, nome_fantasia, cnpj, inscricao_municipal, codigo_municipio_ibge, regime_tributario, email_contato, cnae, situacao_simples_nacional, regime_apuracao_ibscbs_sn, data_opcao_regime_regular, regime_apuracao_confirmado_em, provider_fiscal",
     )
     .eq("id", sessao.empresaId)
     .single();
@@ -68,6 +68,7 @@ export default async function ConfiguracoesPage() {
           situacaoSimplesNacional: empresa?.situacao_simples_nacional ?? "nao_optante",
           regimeApuracaoSN: empresa?.regime_apuracao_ibscbs_sn ?? null,
           dataOpcaoRegimeRegular: empresa?.data_opcao_regime_regular ?? null,
+          regimeApuracaoConfirmadoEm: empresa?.regime_apuracao_confirmado_em ?? null,
           providerFiscal: empresa?.provider_fiscal ?? "mock",
         }}
       />

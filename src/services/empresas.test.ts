@@ -7,6 +7,7 @@ import {
   salvarCertificadoA1,
 } from "@/services/empresas";
 import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
+import { diasAtePrazoOpcao, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
 
 /**
  * O ponto destes testes é a validação, não o UPDATE. Sem ela, o tenant salvaria
@@ -318,5 +319,44 @@ describe("salvarCertificadoA1", () => {
     });
 
     expect(uploads).toEqual([`${EMPRESA}/certificado-a1.enc`]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prazo do art. 41, §3o da LC 214/2025 — setembro/2026.
+// ---------------------------------------------------------------------------
+
+describe("prazo da opcao de regime de apuracao", () => {
+  it("aberto ate 30/09/2026 inclusive, fechado no dia seguinte", () => {
+    expect(prazoOpcaoAberto(new Date("2026-08-10T12:00:00Z"))).toBe(true);
+    expect(prazoOpcaoAberto(new Date("2026-09-30T23:00:00Z"))).toBe(true);
+    expect(prazoOpcaoAberto(new Date("2026-10-01T00:00:00Z"))).toBe(false);
+  });
+
+  it("conta os dias restantes e fica negativo depois de vencido", () => {
+    expect(diasAtePrazoOpcao(new Date("2026-09-29T00:00:00Z"))).toBeGreaterThan(0);
+    expect(diasAtePrazoOpcao(new Date("2026-10-15T00:00:00Z"))).toBeLessThan(0);
+  });
+
+  it("registra a confirmacao ao salvar, para optante", async () => {
+    const { db, updates } = bancoFalso();
+    await atualizarDadosFiscais(db, {
+      empresaId: EMPRESA,
+      dados: { ...SIMPLES, regimeApuracaoSN: "ambos_pelo_sn" },
+    });
+
+    const u = updates[0] as Record<string, unknown>;
+    expect(u.regime_apuracao_confirmado_em).toBeTruthy();
+  });
+
+  it("nao registra confirmacao para quem nao e optante — nao ha escolha a fazer", async () => {
+    const { db, updates } = bancoFalso();
+    await atualizarDadosFiscais(db, {
+      empresaId: EMPRESA,
+      dados: { ...BASE, regimeTributario: "lucro_real", situacaoSimplesNacional: "nao_optante" },
+    });
+
+    const u = updates[0] as Record<string, unknown>;
+    expect(u.regime_apuracao_confirmado_em).toBeNull();
   });
 });

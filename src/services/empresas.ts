@@ -199,6 +199,16 @@ export async function atualizarDadosFiscais(
       situacao_simples_nacional: d.situacaoSimplesNacional,
       regime_apuracao_ibscbs_sn: d.regimeApuracaoSN ?? null,
       data_opcao_regime_regular: d.dataOpcaoRegimeRegular ?? null,
+      // Salvar esta tela com o bloco de apuração visível É a manifestação: o
+      // usuário viu o seletor, viu o prazo e submeteu. Só marca para optante —
+      // quem não é não tem escolha a fazer, e carimbar confirmação ali seria
+      // registrar decisão que não existe.
+      //
+      // NÃO registra a comunicação ao Fisco, que acontece fora do sistema. O
+      // que a coluna separa é "nunca decidiu" de "decidiu", para o aviso do
+      // prazo não incomodar quem já resolveu.
+      regime_apuracao_confirmado_em:
+        d.situacaoSimplesNacional === "nao_optante" ? null : new Date().toISOString(),
     })
     .eq("id", params.empresaId); // RLS restringe a admins/owners da empresa
 

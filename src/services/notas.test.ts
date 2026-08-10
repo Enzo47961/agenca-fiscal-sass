@@ -540,3 +540,63 @@ describe("solicitarEmissao — codigo que exige gTribRegular falha fechado", () 
     expect(payload().ibscbs_cclasstrib).toBe("000001");
   });
 });
+
+describe("solicitarEmissao — tributacao regular informada a mao", () => {
+  beforeEach(() => limparCacheDominioFiscal());
+
+  it("aceita o par quando o codigo exige o grupo", async () => {
+    // O sistema nao deduz o par; quem emite informa e responde por ele.
+    const { db, payload } = dbFiscal({
+      correlacao: [],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+      exigeTribRegular: true,
+    });
+
+    await solicitarEmissao(db, {
+      ...base,
+      declaracaoIbsCbs: {
+        cst: "550",
+        cClassTrib: "550016",
+        tribRegular: { cstRegular: "000", cClassTribRegular: "000001" },
+      },
+    });
+
+    const p = payload();
+    expect(p.ibscbs_trib_reg_cst).toBe("000");
+    expect(p.ibscbs_trib_reg_cclasstrib).toBe("000001");
+  });
+
+  it("recusa o grupo em codigo que NAO o admite — seria rejeicao E0964", async () => {
+    const { db } = dbFiscal({
+      correlacao: [],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+      exigeTribRegular: false,
+    });
+
+    await expect(
+      solicitarEmissao(db, {
+        ...base,
+        declaracaoIbsCbs: {
+          cst: "000",
+          cClassTrib: "000001",
+          tribRegular: { cstRegular: "000", cClassTribRegular: "000001" },
+        },
+      }),
+    ).rejects.toThrow(/NÃO admite/i);
+  });
+
+  it("a mensagem de recusa manda consultar o contador, nao promete automacao", async () => {
+    const { db } = dbFiscal({
+      correlacao: [],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+      exigeTribRegular: true,
+    });
+
+    await expect(
+      solicitarEmissao(db, {
+        ...base,
+        declaracaoIbsCbs: { cst: "550", cClassTrib: "550016" },
+      }),
+    ).rejects.toThrow(/contador/i);
+  });
+});

@@ -17,6 +17,7 @@ import {
 // (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
 import type { ProviderInfo } from "@/lib/fiscal/providers";
 import { REGIME_APURACAO_SN_LABEL } from "@/lib/fiscal/ibscbs";
+import { diasAtePrazoOpcao, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
 import {
   salvarDadosFiscaisAction,
   salvarProviderFiscalAction,
@@ -144,6 +145,7 @@ interface DadosIniciais {
   situacaoSimplesNacional: string;
   regimeApuracaoSN: string | null;
   dataOpcaoRegimeRegular: string | null;
+  regimeApuracaoConfirmadoEm: string | null;
   providerFiscal: string;
 }
 
@@ -218,6 +220,15 @@ export function FormularioConfiguracoes({
   // ---- A6: regime de apuração de IBS/CBS no Simples ----
   const aceitaRegimeApuracao = regime === "simples_nacional" || regime === "mei";
   const optouPeloRegular = apuracao === "cbs_sn_ibs_regular" || apuracao === "ambos_regime_regular";
+
+  // Prazo do art. 41, §3º. `useMemo` sem dependências: a data é lida uma vez
+  // por render do formulário, e recalcular a cada tecla não muda nada.
+  const { prazoAberto, diasRestantes } = useMemo(
+    () => ({ prazoAberto: prazoOpcaoAberto(), diasRestantes: Math.max(0, diasAtePrazoOpcao()) }),
+    [],
+  );
+  const precisaDecidirApuracao =
+    aceitaRegimeApuracao && !dadosIniciais.regimeApuracaoConfirmadoEm;
 
   /**
    * A situação no Simples não é um campo à parte na tela: ela é a mesma
@@ -345,6 +356,45 @@ export function FormularioConfiguracoes({
           {aceitaRegimeApuracao ? (
             <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
               <p className="text-sm font-medium text-slate-700">Apuração de IBS/CBS</p>
+
+              {/*
+                Aviso do prazo (art. 41, §3º da LC 214/2025). Só aparece para
+                quem AINDA NÃO decidiu: depois do A6 o valor de quem nunca abriu
+                esta tela é `ambos_pelo_sn`, igual ao de quem leu e escolheu
+                ficar no unificado. `regimeApuracaoConfirmadoEm` é o que separa
+                os dois — sem ele o aviso incomodaria quem já resolveu, e aviso
+                que incomoda vira aviso ignorado.
+              */}
+              {precisaDecidirApuracao ? (
+                <div
+                  role="status"
+                  className={`mt-3 rounded-lg border px-3 py-2.5 text-xs ${
+                    prazoAberto
+                      ? "border-amber-300 bg-amber-50 text-amber-900"
+                      : "border-red-300 bg-red-50 text-red-900"
+                  }`}
+                >
+                  <p className="font-medium">
+                    {prazoAberto
+                      ? `Você ainda não registrou sua opção — faltam ${diasRestantes} ${
+                          diasRestantes === 1 ? "dia" : "dias"
+                        }.`
+                      : "O prazo para comunicar a opção venceu."}
+                  </p>
+                  <p className="mt-1">
+                    Até <strong>30 de setembro de 2026</strong>, o optante pelo Simples Nacional
+                    comunica se apura IBS e CBS dentro do Simples ou pelo regime regular
+                    (art. 41, §3º da LC 214/2025).{" "}
+                    <strong>Quem não se manifestar permanece no regime unificado</strong> — o
+                    silêncio já é uma resposta, e ela vale até a próxima janela.
+                  </p>
+                  <p className="mt-1">
+                    Escolha abaixo e salve para registrar sua decisão aqui. A comunicação ao
+                    Fisco é feita fora deste sistema.
+                  </p>
+                </div>
+              ) : null}
+
               <p className="mt-1 text-xs text-slate-500">
                 A reforma exige declarar o regime de apuração <strong>por tributo</strong> — dá
                 para apurar CBS pelo Simples e IBS pelo regime regular ao mesmo tempo. A escolha

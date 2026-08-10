@@ -508,6 +508,12 @@ export class FocusNfeProvider implements FiscalProvider {
         ibs_cbs_situacao_tributaria: declaracao?.cst ?? undefined,
         ibs_cbs_classificacao_tributaria: declaracao?.cClassTrib ?? undefined,
         ibs_cbs_credito_codigo_classificacao: declaracao?.cCredPres ?? undefined,
+        // gTribRegular — o par é informado à mão por quem emite; o sistema não
+        // o deduz. Ver `solicitarEmissao`.
+        ibs_cbs_situacao_tributaria_regular: declaracao?.tribRegular?.cstRegular ?? undefined,
+        ibs_cbs_classificacao_tributaria_regular:
+          declaracao?.tribRegular?.cClassTribRegular ?? undefined,
+        ...ajusteDeBase(base),
         // Componentes da base (NT-009). `undefined` quando zero: mandar 0,00
         // num campo opcional é ruído, e a ausência já significa "não há".
         desconto_incondicionado: base?.descontoIncondicionadoCentavos
@@ -522,6 +528,37 @@ export class FocusNfeProvider implements FiscalProvider {
       regime_tributario_simples_nacional: regApTribSN,
     };
   }
+}
+
+/**
+ * Nome do campo do ajuste de base na API da Focus. **Ainda desconhecido.**
+ *
+ * O valor já está calculado e disponível (`baseCalculo.ajusteBaseCentavos`,
+ * com `tipoAjusteBase` dizendo se é `vCalcAjusteBCIBSCBS` ou
+ * `vCalcAjusteBCLocImoveis`). O que falta é só a CHAVE: nenhuma das variações
+ * aparece na referência de campos da Focus para NFS-e nacional, e o usuário
+ * abrirá um ticket no suporte deles para obtê-la.
+ *
+ * Quando a resposta chegar, preencha as duas entradas abaixo e nada mais
+ * precisa mudar — `ajusteDeBase()` já monta o par e os testes já cobrem os dois
+ * estados. Deixar `null` mantém o campo fora do payload, que é o comportamento
+ * correto enquanto o nome for desconhecido: inventar chave faria a nota sair
+ * com o valor num lugar que o Fisco não lê, e o erro só apareceria na apuração.
+ */
+const CAMPO_AJUSTE_BASE: Readonly<Record<"ibscbs" | "loc_imoveis", string | null>> = {
+  ibscbs: null, // ← vCalcAjusteBCIBSCBS
+  loc_imoveis: null, // ← vCalcAjusteBCLocImoveis
+};
+
+/**
+ * Monta o ajuste de base quando há valor E o nome do campo é conhecido.
+ * Devolve `{}` — que se espalha em nada — nos demais casos.
+ */
+function ajusteDeBase(base: EmitirNfseInput["servico"]["reforma"]["baseCalculo"]): Record<string, string> {
+  if (!base?.ajusteBaseCentavos || !base.tipoAjusteBase) return {};
+  const campo = CAMPO_AJUSTE_BASE[base.tipoAjusteBase];
+  if (!campo) return {};
+  return { [campo]: centavosParaReais(base.ajusteBaseCentavos) };
 }
 
 /** Fábrica usada pelo registry — lê o ambiente validado em src/lib/env.ts. */

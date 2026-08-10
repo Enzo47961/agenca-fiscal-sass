@@ -337,6 +337,7 @@ export type Database = {
           nome_fantasia: string | null
           provider_fiscal: string
           razao_social: string
+          regime_apuracao_confirmado_em: string | null
           regime_apuracao_ibscbs_sn:
             | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
             | null
@@ -356,6 +357,7 @@ export type Database = {
           nome_fantasia?: string | null
           provider_fiscal?: string
           razao_social: string
+          regime_apuracao_confirmado_em?: string | null
           regime_apuracao_ibscbs_sn?:
             | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
             | null
@@ -375,6 +377,7 @@ export type Database = {
           nome_fantasia?: string | null
           provider_fiscal?: string
           razao_social?: string
+          regime_apuracao_confirmado_em?: string | null
           regime_apuracao_ibscbs_sn?:
             | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
             | null
