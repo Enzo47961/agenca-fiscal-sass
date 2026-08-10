@@ -17,11 +17,12 @@ export const REGIMES_TRIBUTARIOS = [
 
 export type RegimeTributario = (typeof REGIMES_TRIBUTARIOS)[number];
 
-/**
- * Único regime em que a marcação "Simples Nacional por fora" tem efeito.
- * A justificativa completa está em `dadosFiscaisSchema` (services/empresas.ts).
- */
-export const REGIME_COM_SIMPLES_POR_FORA = "simples_nacional";
+// REGIME_COM_SIMPLES_POR_FORA foi removido junto com o booleano
+// `simples_por_fora` (A6). A pergunta que ele respondia — "quem pode optar por
+// apurar IBS/CBS pelo regime regular" — passou a ser respondida pelo par
+// situação no Simples × regime de apuração, em `lib/fiscal/ibscbs.ts`. Uma
+// constante sobrevivente ao campo que ela guardava só seria convite a
+// reintroduzir o modelo antigo por engano.
 
 /**
  * Regimes para os quais a obrigatoriedade do NBS é DUVIDOSA (item A7).

@@ -11,6 +11,7 @@ import {
   buscarCst,
   declaracaoDeColunas,
   declaracaoIbsCbsSchema,
+  intencaoDeColunas,
   validarDeclaracao,
   type DeclaracaoTributariaIBSCBS,
 } from "@/lib/fiscal/ibscbs";
@@ -299,5 +300,100 @@ describe("declaracaoDeColunas", () => {
       ibscbs_cclasstrib: "200027",
     })!;
     expect(validarDeclaracao(d).valido).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A6 — intenção de regime tributário, com vigência da opção.
+//
+// É aqui que o antigo `simples_por_fora` deixa de ser decorativo: a escolha
+// passa a acompanhar a nota até o provider, recortada pela competência.
+// ---------------------------------------------------------------------------
+
+describe("intencaoDeColunas", () => {
+  const OPTANTE = {
+    regime: "padrao",
+    competencia: "2026-07-18",
+    situacaoSimplesNacional: "me_epp",
+    regimeApuracaoSN: "ambos_pelo_sn",
+    dataOpcaoRegimeRegular: null,
+  } as const;
+
+  it("quem não é optante não declara regime de apuração do Simples", () => {
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      situacaoSimplesNacional: "nao_optante",
+      regimeApuracaoSN: null,
+    });
+    expect(i.regimeApuracaoSN).toBeNull();
+    expect(i.situacaoSimplesNacional).toBe("nao_optante");
+  });
+
+  it("optante sem opção declarada cai em ambos_pelo_sn", () => {
+    expect(intencaoDeColunas({ ...OPTANTE, regimeApuracaoSN: null }).regimeApuracaoSN).toBe(
+      "ambos_pelo_sn",
+    );
+  });
+
+  it("honra o regime híbrido declarado", () => {
+    const i = intencaoDeColunas({ ...OPTANTE, regimeApuracaoSN: "cbs_sn_ibs_regular" });
+    expect(i.regimeApuracaoSN).toBe("cbs_sn_ibs_regular");
+  });
+
+  it("nota ANTERIOR à opção sai como ambos_pelo_sn", () => {
+    // Uma opção feita em junho não pode reescrever a apuração de janeiro.
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      competencia: "2026-01-31",
+      regimeApuracaoSN: "ambos_regime_regular",
+      dataOpcaoRegimeRegular: "2026-06-01",
+    });
+    expect(i.regimeApuracaoSN).toBe("ambos_pelo_sn");
+  });
+
+  it("nota na data da opção JÁ está sob o regime novo", () => {
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      competencia: "2026-06-01",
+      regimeApuracaoSN: "ambos_regime_regular",
+      dataOpcaoRegimeRegular: "2026-06-01",
+    });
+    expect(i.regimeApuracaoSN).toBe("ambos_regime_regular");
+  });
+
+  it("nota posterior à opção sai sob o regime novo", () => {
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      competencia: "2026-12-31",
+      regimeApuracaoSN: "cbs_sn_ibs_regular",
+      dataOpcaoRegimeRegular: "2026-06-01",
+    });
+    expect(i.regimeApuracaoSN).toBe("cbs_sn_ibs_regular");
+  });
+
+  it("opção sem data é honrada em qualquer competência", () => {
+    // Estado de quem veio da marcação booleana antiga: descartar a escolha em
+    // silêncio seria pior que aplicá-la sem recorte.
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      competencia: "2020-01-01",
+      regimeApuracaoSN: "ambos_regime_regular",
+      dataOpcaoRegimeRegular: null,
+    });
+    expect(i.regimeApuracaoSN).toBe("ambos_regime_regular");
+  });
+
+  it("a vigência não afeta quem nunca optou pelo regime regular", () => {
+    const i = intencaoDeColunas({
+      ...OPTANTE,
+      competencia: "2020-01-01",
+      regimeApuracaoSN: "ambos_pelo_sn",
+      dataOpcaoRegimeRegular: null,
+    });
+    expect(i.regimeApuracaoSN).toBe("ambos_pelo_sn");
+  });
+
+  it("o regime IBS/CBS da nota passa intacto", () => {
+    expect(intencaoDeColunas({ ...OPTANTE, regime: "reducao_60" }).regime).toBe("reducao_60");
   });
 });

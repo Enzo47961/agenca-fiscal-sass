@@ -312,14 +312,18 @@ export type Database = {
           cnpj: string
           codigo_municipio_ibge: string
           created_at: string
+          data_opcao_regime_regular: string | null
           email_contato: string
           id: string
           inscricao_municipal: string | null
           nome_fantasia: string | null
           provider_fiscal: string
           razao_social: string
+          regime_apuracao_ibscbs_sn:
+            | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
+            | null
           regime_tributario: string
-          simples_por_fora: boolean
+          situacao_simples_nacional: Database["public"]["Enums"]["situacao_simples_nacional"]
           updated_at: string
         }
         Insert: {
@@ -327,14 +331,18 @@ export type Database = {
           cnpj: string
           codigo_municipio_ibge: string
           created_at?: string
+          data_opcao_regime_regular?: string | null
           email_contato: string
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
           provider_fiscal?: string
           razao_social: string
+          regime_apuracao_ibscbs_sn?:
+            | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
+            | null
           regime_tributario?: string
-          simples_por_fora?: boolean
+          situacao_simples_nacional?: Database["public"]["Enums"]["situacao_simples_nacional"]
           updated_at?: string
         }
         Update: {
@@ -342,14 +350,18 @@ export type Database = {
           cnpj?: string
           codigo_municipio_ibge?: string
           created_at?: string
+          data_opcao_regime_regular?: string | null
           email_contato?: string
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
           provider_fiscal?: string
           razao_social?: string
+          regime_apuracao_ibscbs_sn?:
+            | Database["public"]["Enums"]["regime_apuracao_ibscbs_sn"]
+            | null
           regime_tributario?: string
-          simples_por_fora?: boolean
+          situacao_simples_nacional?: Database["public"]["Enums"]["situacao_simples_nacional"]
           updated_at?: string
         }
         Relationships: []
@@ -856,6 +868,15 @@ export type Database = {
       membro_papel: "owner" | "admin" | "operador"
       nota_status: "pendente" | "reprocessando" | "emitida" | "falhou"
       plano_tipo: "starter" | "pro" | "escala"
+      regime_apuracao_ibscbs_sn:
+        | "ambos_pelo_sn"
+        | "cbs_sn_ibs_regular"
+        | "ambos_regime_regular"
+      situacao_simples_nacional:
+        | "nao_optante"
+        | "mei"
+        | "me_epp"
+        | "optante_pendente"
       tentativa_resultado: "sucesso" | "erro_transiente" | "erro_permanente"
       tipo_ajuste_base_ibscbs: "ibscbs" | "loc_imoveis"
     }
@@ -992,6 +1013,17 @@ export const Constants = {
       membro_papel: ["owner", "admin", "operador"],
       nota_status: ["pendente", "reprocessando", "emitida", "falhou"],
       plano_tipo: ["starter", "pro", "escala"],
+      regime_apuracao_ibscbs_sn: [
+        "ambos_pelo_sn",
+        "cbs_sn_ibs_regular",
+        "ambos_regime_regular",
+      ],
+      situacao_simples_nacional: [
+        "nao_optante",
+        "mei",
+        "me_epp",
+        "optante_pendente",
+      ],
       tentativa_resultado: ["sucesso", "erro_transiente", "erro_permanente"],
       tipo_ajuste_base_ibscbs: ["ibscbs", "loc_imoveis"],
     },

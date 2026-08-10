@@ -171,6 +171,18 @@ export const REG_AP_IBSCBS_SN: Readonly<Record<RegimeApuracaoIbsCbsSN, number>> 
   ambos_regime_regular: 3,
 };
 
+/**
+ * Rótulos para UI. Descrevem o que a escolha FAZ (onde cada tributo é apurado),
+ * sem prometer valor de crédito ao tomador — a regra de crédito do Simples sob
+ * a LC 214/2025 ainda não está definida, e a tela já prometeu isso uma vez
+ * sem nada por trás (item A6).
+ */
+export const REGIME_APURACAO_SN_LABEL: Record<RegimeApuracaoIbsCbsSN, string> = {
+  ambos_pelo_sn: "IBS e CBS pelo Simples Nacional (padrão)",
+  cbs_sn_ibs_regular: "CBS pelo Simples, IBS pelo regime regular (híbrido)",
+  ambos_regime_regular: "IBS e CBS pelo regime regular",
+};
+
 // ---------------------------------------------------------------------------
 // O que o prestador DECLARA (grupo .../DPS/infDPS/IBSCBS/valores/trib/gIBSCBS)
 // ---------------------------------------------------------------------------
@@ -381,6 +393,65 @@ export function declaracaoDeColunas(nota: {
           percentualCbs: nota.ibscbs_dif_perc_cbs,
         }
       : null,
+  };
+}
+
+/**
+ * Monta a intenção de regime tributário de uma nota (item A6).
+ *
+ * Aqui mora o efeito que `simples_por_fora` prometia e não tinha: a escolha do
+ * regime de apuração deixa de ser um campo guardado e passa a acompanhar a
+ * nota até o provider.
+ *
+ * VIGÊNCIA é o ponto delicado. A opção pelo regime regular é um ato com data, e
+ * o que vale para uma nota é o regime na COMPETÊNCIA dela — não o que está
+ * marcado hoje. Uma nota de competência anterior à opção sai como
+ * `ambos_pelo_sn`, senão uma opção feita em junho reescreveria retroativamente
+ * a apuração de janeiro a maio.
+ *
+ * Quando a data é desconhecida (`null`), a opção é honrada sem recorte
+ * temporal. É o estado de quem já usava a marcação booleana antiga, que a
+ * migration não teve como datar sem inventar vigência. Ignorar a escolha nesse
+ * caso seria pior: descartaria em silêncio uma declaração explícita do
+ * contribuinte.
+ *
+ * Função pura e testada de propósito — reconstruir isto dentro da função
+ * Inngest é a armadilha 1 do HANDOFF.
+ */
+export function intencaoDeColunas(params: {
+  regime: RegimeIbsCbs;
+  /** Competência da nota, ISO `yyyy-mm-dd`. */
+  competencia: string;
+  situacaoSimplesNacional: SituacaoSimplesNacional;
+  regimeApuracaoSN: RegimeApuracaoIbsCbsSN | null;
+  dataOpcaoRegimeRegular: string | null;
+}): IntencaoRegimeTributario {
+  // Quem não é optante não tem regime de apuração do Simples a declarar:
+  // apura pelo regime regular por definição.
+  if (params.situacaoSimplesNacional === "nao_optante") {
+    return {
+      regime: params.regime,
+      situacaoSimplesNacional: "nao_optante",
+      regimeApuracaoSN: null,
+    };
+  }
+
+  const declarado = params.regimeApuracaoSN ?? "ambos_pelo_sn";
+  const envolveRegimeRegular =
+    declarado === "cbs_sn_ibs_regular" || declarado === "ambos_regime_regular";
+
+  // Comparação de datas ISO como string funciona porque `yyyy-mm-dd` é
+  // lexicograficamente ordenado — e evita fuso horário, que aqui só teria como
+  // introduzir erro de um dia na virada da competência.
+  const aindaNaoVigente =
+    envolveRegimeRegular &&
+    params.dataOpcaoRegimeRegular !== null &&
+    params.competencia < params.dataOpcaoRegimeRegular;
+
+  return {
+    regime: params.regime,
+    situacaoSimplesNacional: params.situacaoSimplesNacional,
+    regimeApuracaoSN: aindaNaoVigente ? "ambos_pelo_sn" : declarado,
   };
 }
 

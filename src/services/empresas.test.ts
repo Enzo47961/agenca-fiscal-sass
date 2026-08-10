@@ -6,7 +6,6 @@ import {
   pareceArquivoPfx,
   salvarCertificadoA1,
 } from "@/services/empresas";
-import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
 import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
 
 /**
@@ -88,12 +87,12 @@ describe("atualizarProviderFiscal", () => {
 });
 
 // ---------------------------------------------------------------------------
-// dadosFiscaisSchema: "Simples por fora" x regime tributário
+// dadosFiscaisSchema: regime de apuração de IBS/CBS x regime tributário (A6)
 //
-// O campo é gravado em `empresas.simples_por_fora` e a intenção é que ele
-// influencie o enquadramento IBS/CBS. Aceitá-lo em um regime onde não se aplica
-// grava uma marcação que o resto do sistema ignora — e o usuário fica achando
-// que fez uma escolha fiscal que nunca aconteceu.
+// Substituiu o booleano `simplesPorFora`. Os testes de proteção do A5 seguem
+// aqui, reescritos no modelo novo: o que eles guardam não é o nome do campo, é
+// a regra de que MEI não opta pelo regime regular enquanto a dúvida normativa
+// estiver de pé.
 // ---------------------------------------------------------------------------
 
 const BASE = {
@@ -103,71 +102,113 @@ const BASE = {
   emailContato: "contato@exemplo.com.br",
 } as const;
 
-describe("dadosFiscaisSchema — simplesPorFora", () => {
-  it("aceita a marcação no Simples Nacional", () => {
+const SIMPLES = {
+  ...BASE,
+  regimeTributario: "simples_nacional",
+  situacaoSimplesNacional: "me_epp",
+} as const;
+
+describe("dadosFiscaisSchema — regime de apuração no Simples (A6)", () => {
+  it("aceita a opção pelo regime regular no Simples Nacional", () => {
     const r = dadosFiscaisSchema.safeParse({
-      ...BASE,
-      regimeTributario: "simples_nacional",
-      simplesPorFora: true,
+      ...SIMPLES,
+      regimeApuracaoSN: "ambos_regime_regular",
+      dataOpcaoRegimeRegular: "2026-01-01",
     });
     expect(r.success).toBe(true);
-    if (r.success) expect(r.data.simplesPorFora).toBe(true);
+    if (r.success) expect(r.data.regimeApuracaoSN).toBe("ambos_regime_regular");
   });
 
-  it("recusa MEI com a marcação, e a mensagem explica o porquê", () => {
+  it("aceita o regime híbrido — CBS pelo Simples, IBS pelo regular", () => {
+    // É o caso que o booleano antigo não conseguia representar.
+    const r = dadosFiscaisSchema.safeParse({
+      ...SIMPLES,
+      regimeApuracaoSN: "cbs_sn_ibs_regular",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("recusa MEI optando pelo regime regular, e a mensagem explica o porquê", () => {
     const r = dadosFiscaisSchema.safeParse({
       ...BASE,
       regimeTributario: "mei",
-      simplesPorFora: true,
+      situacaoSimplesNacional: "mei",
+      regimeApuracaoSN: "ambos_regime_regular",
     });
 
     expect(r.success).toBe(false);
     if (!r.success) {
-      const issue = r.error.issues[0];
-      expect(issue?.path).toEqual(["simplesPorFora"]);
+      const issue = r.error.issues.find((i) => i.path[0] === "regimeApuracaoSN");
       expect(issue?.message).toMatch(/MEI/);
     }
   });
 
-  it("recusa lucro presumido e lucro real com a marcação", () => {
+  it("recusa regime de apuração do Simples para quem não é optante", () => {
     for (const regimeTributario of ["lucro_presumido", "lucro_real"] as const) {
       const r = dadosFiscaisSchema.safeParse({
         ...BASE,
         regimeTributario,
-        simplesPorFora: true,
+        situacaoSimplesNacional: "nao_optante",
+        regimeApuracaoSN: "ambos_regime_regular",
       });
       expect(r.success).toBe(false);
       if (!r.success) expect(r.error.issues[0]?.message).toMatch(/regime regular/);
     }
   });
 
-  // Sem isto, a validação viraria uma regra sobre o REGIME em vez de uma regra
-  // sobre a COMBINAÇÃO, e o MEI não conseguiria salvar nada.
-  it("não estorva regime nenhum quando a marcação está desligada", () => {
-    for (const regimeTributario of [
-      "simples_nacional",
-      "lucro_presumido",
-      "lucro_real",
-      "mei",
-    ] as const) {
-      expect(
-        dadosFiscaisSchema.safeParse({ ...BASE, regimeTributario, simplesPorFora: false }).success,
-      ).toBe(true);
-      // omitido = default false
-      expect(dadosFiscaisSchema.safeParse({ ...BASE, regimeTributario }).success).toBe(true);
+  it("exige o regime de apuração de quem É optante", () => {
+    const r = dadosFiscaisSchema.safeParse({ ...SIMPLES });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path[0] === "regimeApuracaoSN")).toBe(true);
     }
   });
 
-  it("a UI e o schema usam a MESMA constante de regime", () => {
-    // Divergência aqui é o cenário que a constante compartilhada existe para
-    // impedir: a tela oferecer o campo que o schema recusa.
-    expect(
-      dadosFiscaisSchema.safeParse({
-        ...BASE,
-        regimeTributario: REGIME_COM_SIMPLES_POR_FORA,
-        simplesPorFora: true,
-      }).success,
-    ).toBe(true);
+  it("recusa situação incompatível com o regime tributário declarado", () => {
+    // Os dois campos respondem à mesma pergunta por ângulos diferentes.
+    const r = dadosFiscaisSchema.safeParse({
+      ...BASE,
+      regimeTributario: "lucro_real",
+      situacaoSimplesNacional: "me_epp",
+      regimeApuracaoSN: "ambos_pelo_sn",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("não estorva regime nenhum na configuração padrão", () => {
+    // Sem isto, a validação viraria uma regra sobre o REGIME em vez de uma
+    // regra sobre a COMBINAÇÃO, e ninguém conseguiria salvar nada.
+    const padrao = {
+      simples_nacional: { situacaoSimplesNacional: "me_epp", regimeApuracaoSN: "ambos_pelo_sn" },
+      mei: { situacaoSimplesNacional: "mei", regimeApuracaoSN: "ambos_pelo_sn" },
+      lucro_presumido: { situacaoSimplesNacional: "nao_optante" },
+      lucro_real: { situacaoSimplesNacional: "nao_optante" },
+    } as const;
+
+    for (const [regimeTributario, extra] of Object.entries(padrao)) {
+      expect(dadosFiscaisSchema.safeParse({ ...BASE, regimeTributario, ...extra }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("recusa data de opção sem opção pelo regime regular", () => {
+    const r = dadosFiscaisSchema.safeParse({
+      ...SIMPLES,
+      regimeApuracaoSN: "ambos_pelo_sn",
+      dataOpcaoRegimeRegular: "2026-03-01",
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.path).toEqual(["dataOpcaoRegimeRegular"]);
+  });
+
+  it("aceita opção SEM data — é o estado de quem veio da marcação antiga", () => {
+    // A migration não teve como datar essas empresas sem inventar vigência.
+    const r = dadosFiscaisSchema.safeParse({
+      ...SIMPLES,
+      regimeApuracaoSN: "ambos_regime_regular",
+    });
+    expect(r.success).toBe(true);
   });
 
   it("atualizarDadosFiscais não grava a combinação inválida", async () => {
@@ -175,7 +216,12 @@ describe("dadosFiscaisSchema — simplesPorFora", () => {
     await expect(
       atualizarDadosFiscais(db, {
         empresaId: EMPRESA,
-        dados: { ...BASE, regimeTributario: "mei", simplesPorFora: true },
+        dados: {
+          ...BASE,
+          regimeTributario: "mei",
+          situacaoSimplesNacional: "mei",
+          regimeApuracaoSN: "ambos_regime_regular",
+        },
       }),
     ).rejects.toThrow();
 

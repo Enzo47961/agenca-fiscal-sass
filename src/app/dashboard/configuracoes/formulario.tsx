@@ -16,7 +16,7 @@ import {
 // `import type` é apagado na compilação: o módulo de providers é server-only
 // (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
 import type { ProviderInfo } from "@/lib/fiscal/providers";
-import { REGIME_COM_SIMPLES_POR_FORA } from "@/lib/fiscal/regimes";
+import { REGIME_APURACAO_SN_LABEL } from "@/lib/fiscal/ibscbs";
 import {
   salvarDadosFiscaisAction,
   salvarProviderFiscalAction,
@@ -141,7 +141,9 @@ interface DadosIniciais {
   regimeTributario: string;
   emailContato: string;
   cnae: string;
-  simplesPorFora: boolean;
+  situacaoSimplesNacional: string;
+  regimeApuracaoSN: string | null;
+  dataOpcaoRegimeRegular: string | null;
   providerFiscal: string;
 }
 
@@ -165,6 +167,9 @@ export function FormularioConfiguracoes({
   const [provider, setProvider] = useState(dadosIniciais.providerFiscal);
 
   const [regime, setRegime] = useState(dadosIniciais.regimeTributario);
+  // "Tudo pelo Simples" é o estado de quem não fez nada: a opção pelo regime
+  // regular é ato do contribuinte, com data.
+  const [apuracao, setApuracao] = useState(dadosIniciais.regimeApuracaoSN ?? "ambos_pelo_sn");
   const [codigoServico, setCodigoServico] = useState("");
   const validacao = useMemo(() => validarCodigoServico(codigoServico), [codigoServico]);
 
@@ -208,8 +213,30 @@ export function FormularioConfiguracoes({
   }
 
   const regimeSelecionado = REGIMES.find((r) => r.valor === regime);
-  const aceitaSimplesPorFora = regime === REGIME_COM_SIMPLES_POR_FORA;
   const providerSelecionado = providers.find((p) => p.nome === provider);
+
+  // ---- A6: regime de apuração de IBS/CBS no Simples ----
+  const aceitaRegimeApuracao = regime === "simples_nacional" || regime === "mei";
+  const optouPeloRegular = apuracao === "cbs_sn_ibs_regular" || apuracao === "ambos_regime_regular";
+
+  /**
+   * A situação no Simples não é um campo à parte na tela: ela é a mesma
+   * pergunta do regime tributário, por outro ângulo, e pedir as duas convidaria
+   * o usuário a se contradizer (o schema recusaria depois de salvar).
+   *
+   * `optante_pendente` é a exceção que justifica olhar o valor atual: é um
+   * estado que vem da Receita, não do nosso formulário, e sobrescrevê-lo com
+   * `me_epp` a cada salvamento apagaria informação que ninguém tem como
+   * redigitar aqui.
+   */
+  const situacao =
+    regime === "mei"
+      ? "mei"
+      : regime === "simples_nacional"
+        ? dadosIniciais.situacaoSimplesNacional === "optante_pendente"
+          ? "optante_pendente"
+          : "me_epp"
+        : "nao_optante";
 
   return (
     <div className="space-y-8">
@@ -307,27 +334,74 @@ export function FormularioConfiguracoes({
             presumido/real convidaria o usuário a um erro que só apareceria depois
             de salvar. Sumindo, o campo nem vai no FormData e vira `false`.
           */}
-          {aceitaSimplesPorFora ? (
-            <label className="flex items-start gap-2 sm:col-span-2">
-              <input
-                type="checkbox"
-                name="simplesPorFora"
-                defaultChecked={dadosIniciais.simplesPorFora}
-                className="mt-1 h-4 w-4 rounded border-slate-300"
-              />
-              <span className="text-sm text-slate-600">
-                Simples Nacional <strong>&quot;por fora&quot;</strong> (destacar IBS/CBS para gerar
-                crédito a clientes B2B). Deixe desmarcado se opta por permanecer &quot;por
-                dentro&quot;.
-              </span>
-            </label>
+          {/*
+            A6. Isto era um checkbox "Simples por fora" que prometia "destacar
+            IBS/CBS para gerar crédito a clientes B2B" e não fazia nada — nem
+            cálculo, nem nota, nem provider. Agora são as duas dimensões que a
+            NT-009 pede, e o texto descreve o que o sistema DE FATO faz:
+            declarar o regime na nota. Nada aqui promete valor de crédito,
+            porque a regra de crédito do Simples ainda não está definida.
+          */}
+          {aceitaRegimeApuracao ? (
+            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+              <p className="text-sm font-medium text-slate-700">Apuração de IBS/CBS</p>
+              <p className="mt-1 text-xs text-slate-500">
+                A reforma exige declarar o regime de apuração <strong>por tributo</strong> — dá
+                para apurar CBS pelo Simples e IBS pelo regime regular ao mesmo tempo. A escolha
+                é declarada na nota; o crédito que o seu cliente aproveita depende da regra do
+                Simples, que ainda não está definida, então não calculamos esse valor.
+              </p>
+
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm text-slate-600">Regime de apuração *</span>
+                  <select
+                    name="regimeApuracaoSN"
+                    value={apuracao}
+                    onChange={(e) => setApuracao(e.target.value)}
+                    className={inputClasses}
+                  >
+                    {Object.entries(REGIME_APURACAO_SN_LABEL)
+                      // MEI fica preso a "tudo pelo Simples" enquanto a dúvida
+                      // normativa não for respondida (regra herdada do A5). O
+                      // schema recusa de qualquer forma; sumir aqui evita
+                      // oferecer o que será rejeitado depois de salvar.
+                      .filter(([valor]) => regime !== "mei" || valor === "ambos_pelo_sn")
+                      .map(([valor, rotulo]) => (
+                        <option key={valor} value={valor}>
+                          {rotulo}
+                        </option>
+                      ))}
+                  </select>
+                  {regime === "mei" ? (
+                    <Ajuda>
+                      O MEI apura tudo pelo Simples. Se a opção pelo regime regular vier a ser
+                      permitida ao MEI, liberamos aqui.
+                    </Ajuda>
+                  ) : null}
+                </label>
+
+                {optouPeloRegular ? (
+                  <label className="block">
+                    <span className="mb-1 block text-sm text-slate-600">Data da opção</span>
+                    <input
+                      type="date"
+                      name="dataOpcaoRegimeRegular"
+                      defaultValue={dadosIniciais.dataOpcaoRegimeRegular ?? ""}
+                      className={inputClasses}
+                    />
+                    <Ajuda>
+                      A opção tem vigência: nota anterior a esta data não está sob o regime
+                      regular. Em branco se você não souber a data ainda.
+                    </Ajuda>
+                  </label>
+                ) : null}
+              </div>
+            </div>
           ) : (
             <p className="text-sm text-slate-500 sm:col-span-2">
-              A opção <strong>Simples Nacional &quot;por fora&quot;</strong> aparece apenas para
-              optantes pelo Simples Nacional.{" "}
-              {regime === "mei"
-                ? "O MEI tem tratamento próprio no IBS/CBS."
-                : "Neste regime o IBS/CBS já é apurado pelo regime regular."}
+              A escolha do regime de apuração de IBS/CBS existe apenas para optantes pelo Simples
+              Nacional. Neste regime o IBS/CBS já é apurado pelo regime regular.
             </p>
           )}
         </div>
@@ -336,6 +410,8 @@ export function FormularioConfiguracoes({
         <fieldset className="mt-6">
           <legend className="mb-2 text-sm text-slate-600">Regime tributário *</legend>
           <input type="hidden" name="regimeTributario" value={regime} />
+          {/* Derivada do regime, nunca digitada — ver o comentário em `situacao`. */}
+          <input type="hidden" name="situacaoSimplesNacional" value={situacao} />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {REGIMES.map((opcao) => {
               const ativo = regime === opcao.valor;

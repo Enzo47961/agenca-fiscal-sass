@@ -36,7 +36,12 @@ export async function salvarDadosFiscaisAction(formData: FormData): Promise<Acti
     regimeTributario: formData.get("regimeTributario"),
     emailContato: formData.get("emailContato"),
     cnae: String(formData.get("cnae") ?? "").replace(/\D/g, "") || undefined,
-    simplesPorFora: formData.get("simplesPorFora") === "on",
+    // A6. O bloco de apuração some da tela fora do Simples, então os dois
+    // campos chegam ausentes nesses regimes — `undefined` é o valor certo,
+    // e o schema recusa a combinação incoerente de qualquer forma.
+    situacaoSimplesNacional: formData.get("situacaoSimplesNacional") ?? undefined,
+    regimeApuracaoSN: formData.get("regimeApuracaoSN") ?? undefined,
+    dataOpcaoRegimeRegular: formData.get("dataOpcaoRegimeRegular") || undefined,
   });
   if (!parse.success) {
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };

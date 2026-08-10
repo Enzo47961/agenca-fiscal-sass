@@ -9,7 +9,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolverProvider } from "@/lib/fiscal/providers";
 import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
-import { declaracaoDeColunas } from "@/lib/fiscal/ibscbs";
+import { declaracaoDeColunas, intencaoDeColunas } from "@/lib/fiscal/ibscbs";
 import { baseDeColunas, type RegimeIbsCbs } from "@/lib/fiscal/reforma";
 import {
   FiscalErrorPermanent,
@@ -145,6 +145,16 @@ export const emitirNfse = inngest.createFunction(
                   // faria a nota emitida divergir da nota gravada se a fórmula
                   // ou as alíquotas mudassem entre a criação e o retry.
                   baseCalculo: baseDeColunas(contexto),
+                  // A6 — regime de apuração no Simples, recortado pela
+                  // vigência da opção. Depende da empresa E da competência da
+                  // nota, por isso é montado a partir das duas.
+                  intencao: intencaoDeColunas({
+                    regime: contexto.regime_ibscbs as RegimeIbsCbs,
+                    competencia: contexto.competencia,
+                    situacaoSimplesNacional: empresa.situacao_simples_nacional,
+                    regimeApuracaoSN: empresa.regime_apuracao_ibscbs_sn,
+                    dataOpcaoRegimeRegular: empresa.data_opcao_regime_regular,
+                  }),
                   regime: contexto.regime_ibscbs as RegimeIbsCbs,
                   cbsAliquota: Number(contexto.cbs_aliquota),
                   ibsAliquota: Number(contexto.ibs_aliquota),
