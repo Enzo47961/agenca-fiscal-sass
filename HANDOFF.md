@@ -1,8 +1,9 @@
 # Agência Fiscal SaaS — Handoff completo
 
-> Documento de passagem de contexto. Escrito em 06/08/2026 e **corrigido em 10/08/2026**,
+> Documento de passagem de contexto. Escrito em 06/08/2026 e reescrito em **10/08/2026**,
 > quando se descobriu que as seções 3 e 4 descreviam um estado que nunca existiu nesta
-> máquina (ver §3.1).
+> máquina (ver §3.1). A mesma data cobre a pesquisa normativa nas fontes primárias (§5.5)
+> e a correção dos privilégios de tabela (§5.6).
 > **Leia `CLAUDE.md` primeiro** — ele tem as 21 regras arquiteturais invioláveis.
 
 ---
@@ -44,12 +45,11 @@ Estas não são preferências, são condições. Quebrar qualquer uma custou ret
 
 ### Fluxo de entrega (importante)
 
-O usuário está no Windows. O git na máquina dele travou uma vez por um `.git/index.lock`
-órfão que **eu** criei, e o `device_bash` não consegue apagar arquivos. Desde então:
-
-O fluxo original era: eu entrego **arquivos `.patch`** numerados em `_patches/` (via
-`git format-patch`) e o usuário aplica com `git am`. **Esse fluxo foi a causa direta do
-incidente da §3.1** — patches entregues, dados como aplicados, e nunca aplicados de fato.
+O usuário está no Windows. O fluxo original nasceu de um incidente antigo — o git travou
+por um `.git/index.lock` órfão criado pelo agente — e virou: eu entrego **arquivos
+`.patch`** numerados em `_patches/` (via `git format-patch`) e o usuário aplica com
+`git am`. **Esse fluxo foi a causa direta do incidente da §3.1**: patches entregues, dados
+como aplicados, e nunca aplicados de fato.
 
 **Combinado em 10/08/2026:** rodar git na máquina dele está liberado, com limites.
 Autorizado por ele explicitamente, depois de a restauração ter sido verificada:
@@ -59,7 +59,10 @@ Autorizado por ele explicitamente, depois de a restauração ter sido verificada
   qualquer coisa que altere histórico remoto. Não empurrar sem ele pedir.
 - Os `.patch` continuam sendo versionados em `_patches/` como registro — o valor deles
   agora é histórico e de auditoria, não de entrega.
-- Migrations: ele roda `npx supabase db reset` e regenera o `database.ts` (§4).
+- **Migrations e tipos: o agente roda.** `npx supabase db reset`, `gen types` e consultas
+  ao Postgres local funcionam nesta máquina (armadilha 9). Valide a migration você mesmo
+  antes de reportar — a versão anterior deste handoff dizia que não dava, e isso custou
+  duas idas e voltas por migration.
 
 ---
 
@@ -75,8 +78,16 @@ Autorizado por ele explicitamente, depois de a restauração ter sido verificada
 | `bccd178` | — | C7 confirmação de regime diferenciado · A7 aviso do NBS |
 | `b3683f7` | — | C7: persistência do registro da confirmação |
 | `6bf3945` | — | A6: regime de apuração no Simples, com vigência |
+| `9ba88e0` | — | Atualização deste handoff |
+| `810b06f` | — | Fonte oficial versionada do cClassTrib + redução pela tabela (§5.5) |
+| `b5a1df8` | — | `NUMERIC(8,5)` na redução oficial — `(7,5)` não comporta 100% |
+| `1d2c4eb` | — | UI da classificação por item + **GRANTs de tabela** (§5.6) |
+| `b96d667` | — | CLI: código de saída e diff legível |
+| `01d6547` | — | Envio de CST, componentes da base e regime do Simples à Focus |
+| `ed08f32` | — | Alinhamento de `PENDENCIAS_C5` e da tela |
 
-**DoD no último commit:** typecheck OK · lint OK · **298 testes** em 19 arquivos · build OK.
+**DoD no último commit:** typecheck OK · lint OK · **332 testes** em 20 arquivos · build OK,
+mais `npx supabase db reset` limpo com 14 migrations.
 
 **Nada foi empurrado.** Todos estes commits estão só em `main` local.
 
@@ -112,7 +123,7 @@ conflito. O `git am` do 0013 falhava porque a **pilha inteira** faltava, não po
 divergência de conteúdo — diagnóstico que custou uma sessão inteira por ter sido lido
 como "conflito no 0013".
 
-### Migrations (10, todas aplicam limpas num Postgres 16 real)
+### Migrations (14, aplicam limpas — `db reset` verificado em 10/08/2026, Postgres 17)
 
 ```
 20260705000000_init.sql
@@ -125,6 +136,10 @@ como "conflito no 0013".
 20260806120000_notas_grupo_ibscbs.sql                 ← 8 colunas IBSCBS + FK composta
 20260806140000_notas_base_calculo_ibscbs.sql          ← B7: componentes do vBC
 20260806160000_indices_listagem.sql                   ← M10: índices
+20260810120000_regime_diferenciado_confirmacao.sql    ← C7: quem confirmou e quando
+20260810140000_regime_apuracao_simples_nacional.sql   ← A6: derruba simples_por_fora
+20260810160000_fontes_oficiais_cclasstrib.sql         ← texto oficial, vigência, Anexo VIII
+20260810180000_grants_de_tabela.sql                   ← §5.6: privilégios que faltavam
 ```
 
 ---
@@ -160,11 +175,10 @@ $b=[IO.File]::ReadAllBytes('src/types/database.ts'); ($b[0..3] | % { $_.ToString
 Nunca "consertar" o arquivo à mão — ele é gerado (regra 3). Se outro arquivo gerado pelo
 Supabase sofrer do mesmo problema, avisar o usuário antes de regenerá-lo.
 
-### Migration pendente de aplicação local
+### Nenhuma migration pendente
 
-`20260806160000_indices_listagem.sql` (M10) chegou com o 0015 e exige
-`npx supabase db reset`. Ela **só cria índices**: não altera tipos e **não** pede
-regeneração do `database.ts`.
+Todas as 14 estão aplicadas no banco local e o `database.ts` está regenerado e conferido
+(UTF-8 com BOM). Quem valida agora é o próprio agente — ver armadilha 9.
 
 ---
 
@@ -290,7 +304,7 @@ Webhook da Focus (`/api/webhook/focusnfe`) **reconsulta a API antes de gravar** 
 faz transição de status** — decisão explícita do usuário, para preservar a consistência do
 motor e evitar transições duplicadas.
 
-### 5.4. Performance (A8/M10, último commit)
+### 5.4. Performance (A8/M10)
 
 `listarClientes` trazia **todos** os clientes; `statusDasNotas` trazia **toda** nota e
 contava em memória. Além da lentidão que cresce em silêncio, se houver `db-max-rows`
@@ -300,6 +314,68 @@ Agora: paginação com `range()` + `count: "exact"` e teto no próprio serviço;
 `head: true` (quatro consultas, zero linhas trafegadas); faturamento recortado ao mês.
 Telas acompanham, com busca por nome (curingas do LIKE escapados) e aviso quando o
 seletor corta.
+
+### 5.5. Pesquisa normativa e a classificação A/B/C
+
+A premissa anterior — "o mapeamento negócio → cClassTrib é decisão contábil" — estava
+**parcialmente errada**, e foi a pesquisa nas fontes primárias que mostrou isso.
+
+**Fontes obtidas (todas primárias, nenhum blog fundamenta regra):**
+
+| Documento | Versão | O que trouxe |
+|---|---|---|
+| [NT SE/CGNFS-e nº 009](https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/rtc/nt-009-se-cgnfse-v1-0-1.pdf) | v1.0.1 | Caminhos XML e ocorrências |
+| Anexo VI — Leiautes e RN | V1.04.00 | 774 regras com código de rejeição |
+| Anexo VII — cIndOp | V1.02.00 | 40 indicadores de operação |
+| Anexo VIII — Correlação | V1.01.00 | **208 itens LC 116 → NBS, cIndOp, cClassTrib** |
+| [Portal SVRS](https://dfe-portal.svrs.rs.gov.br/CFF/ClassificacaoTributaria) | pub. 22/06/2026 | Base completa em JSON, com vigências |
+
+Os anexos são `.xlsx`; há um leitor de `xlsx` e um extrator de PDF em Python no scratchpad
+da sessão, ambos sem dependências externas. **A planilha do Anexo VIII tem 2258 células
+mescladas** — sem tratá-las, os itens 04.02–04.21 (saúde) aparecem sem cClassTrib quando
+na verdade herdam `200029`. É a mesma classe de erro dos ícones CSS.
+
+**A classificação, e por que a linha foi traçada assim:**
+
+- **A — 86 itens.** Única correlação é `000001` (tributação integral, art. 4º da
+  LC 214/2025). Preenchido automaticamente. Três propriedades justificam, e as três
+  precisam valer juntas: é a tributação **cheia** (não reivindica benefício, o erro
+  possível é pagar a mais), não tem redução (nada para divergir das RN 104/111/118) e não
+  exige grupo condicional.
+- **B — 121 itens.** A UI oferece **só os códigos correlacionados àquele item** — em geral
+  um ou dois. Os `8200xx` foram rebaixados de A para B por decisão consciente: pressupõem
+  regime específico do emitente, e **correlação não é elegibilidade**.
+- **C — 1 item** (`99.01.01`). Sem sugestão.
+
+**Duas ressalvas da categoria A, encontradas na auditoria e ainda abertas:** o `cIndOp` não
+é unívoco (37 dos 86 itens têm mais de um) e não é preenchido; e a coluna `ADQ EXTERIOR` do
+Anexo VIII vale `N` em **100%** das linhas — exportação está fora do escopo da correlação, e
+a automação preencheria `000001` mesmo assim (erro para o lado de tributar a mais).
+
+**Conferência da nossa tabela:** códigos (164), CST (18) e indicadores deram **zero
+divergência** contra a fonte. O que faltava era `descricao_oficial` (as nossas eram
+paráfrases — o `200002` omitia "tratores, máquinas e implementos agrícolas"), vigência
+(`220001/2/3`, encerrados em 01/01/2026, todos `IndNfse=false`) e procedência.
+
+**Reduções:** as RN 104/111/118 (rejeições E1543/E1547/E1552) exigem que o percentual seja
+o da tabela do cClassTrib. `fatoresReducao()` faz a tabela mandar e **lança** quando o
+regime afirmado a contradiz. O enum `RegimeIbsCbs` só decide quando não há cClassTrib.
+
+### 5.6. GRANTs de tabela — o defeito que quase passou
+
+Nenhuma migration jamais concedeu privilégio de tabela: o projeto se apoiava só em RLS, e
+**RLS não concede acesso, apenas restringe linhas de quem já tem o privilégio**. Funcionava
+porque o banco de desenvolvimento era antigo; no Postgres 17 do CLI atual o schema `public`
+nasce trancado (`pg_default_acl` concede só `D/x/t/m`). Em qualquer ambiente recriado do
+zero, **toda leitura e escrita via PostgREST falhava com "permission denied"** — silencioso
+até alguém abrir a aplicação. Mesma classe do C1/C3.
+
+Apareceu porque o CLI de sincronização, rodando com `service_role`, não conseguiu ler
+`cclasstrib_ibscbs`. Corrigido espelhando as policies, sem ampliar nada. Duas escolhas que
+não devem ser afrouxadas: `notas_fiscais` tem `SELECT`+`INSERT` mas **não `UPDATE`** — um
+UPDATE direto contornaria a máquina de estados onde mora a correção do IDOR; e
+`authenticated` fica **fora** das default privileges, para que tabela nova nasça
+inacessível e receba grant explícito junto da policy dela.
 
 ---
 
@@ -314,13 +390,12 @@ manual os coleta num `<details>` recolhido, `baseDeColunas()` reconstrói a base
 a envia ao provider em `servico.reforma.baseCalculo`. O destaque de CBS/IBS passou a
 incidir sobre o vBC, não mais sobre o valor bruto.
 
-**Sobra uma ponta, registrada em `PENDENCIAS_C5` e no docstring de `montarPayload`:** o
-vBC **chega** ao `FocusNfeProvider` mas **não é enviado** à API. Os nomes dos campos de
-desconto incondicionado, ajuste de base e vBC não estão na documentação a que tivemos
-acesso, e inventar nome de campo é pior que omitir — a nota sairia com o valor no lugar
-errado em vez de sair sem ele. `valor_servicos` segue sendo o vServ **bruto**, que é o
-que aquele campo pede; não trocar pelo vBC. Confirmar na homologação, junto da mesma
-dúvida sobre o campo do CST.
+**A ponta que sobrava foi resolvida — e o diagnóstico anterior estava errado.** O vBC
+**não deve** ser enviado: no Anexo VI ele mora em `NFSe/infNFSe/IBSCBS/valores/vBC`, lado
+NFS-e, **calculado pelo Ambiente de Dados Nacional**. A DPS manda os componentes, e agora
+mandamos (`01d6547`): CST, `cCredPres`, desconto incondicionado, PIS, COFINS, `opSimpNac`
+e `regApTribSN`. `valor_servicos` segue sendo o vServ **bruto** — não trocar pelo vBC, e há
+teste garantindo que ele não vaza para o payload.
 
 **A1 — CI/CD** (`89bffb0`). `.github/workflows/ci.yml` roda a DoD a cada push e PR.
 Ressalva registrada no próprio arquivo: garante que todo commit em `main` é verde, mas
@@ -343,31 +418,62 @@ intenção chegar ao provider recortada pela vigência — nota anterior à opç
 `ambos_pelo_sn`. **O cálculo do crédito ao tomador NÃO foi feito**, de propósito: a regra
 de crédito do Simples sob a LC 214/2025 é decisão contábil. A tela deixou de prometê-lo.
 
+**UI do grupo IBSCBS** (`1d2c4eb`). Feita, e melhor do que o plano original: em vez de
+oferecer os 71 códigos, oferece **só os correlacionados ao item de serviço** — um ou dois
+na prática. Ver §5.5.
+
+**Sincronização das tabelas oficiais** (`810b06f`, `b96d667`). `npm run fiscal:sync` faz
+diff lógico contra o banco e só grava com `--apply`. Idempotente, verificado com fonte
+simulada em cinco cenários. Código ausente na fonte **não é apagado** — nota já emitida
+precisa continuar resolvível — e ausências não contam para o código de saída, senão um
+portão de CI ficaria vermelho para sempre.
+
 ### 🟠 Alto — o que resta
 
-- **UI do grupo IBSCBS** no formulário de nota, usando a view `cclasstrib_nfse` para
-  oferecer só os 71 códigos válidos (e não os 164). **Atenção antes de codificar:**
-  `PENDENCIAS_C5` registra que o mapeamento negócio → CST/cClassTrib é **decisão
-  contábil**. Uma lista de 71 códigos sem orientação de escolha recria, em escala maior,
-  exatamente o problema que o C7 acabou de mitigar — só que com 71 opções em vez de 5.
-- **Correlação atividade ↔ regime diferenciado** (a outra metade do C7) e **regra de
-  crédito do Simples** (a outra metade do A6). As duas são decisão contábil, não técnica.
+**Três dependem de uma única conversa com a Focus na homologação:**
+
+- **Ajuste de base** (`vCalcAjusteBCIBSCBS` / `vCalcAjusteBCLocImoveis`) não aparece na
+  referência de campos deles. Segue sem envio: quem trabalha com reembolso/repasse ou
+  locação de imóvel tem o ajuste **ignorado pelo Fisco**.
+- **Lado calculado do retorno** (`gTribSN` com `pIBSSN`/`vIBSSN`/`pCBSSN`, e
+  `vReceitaBrutaSN`). É o que prova quanto de crédito o tomador aproveita (art. 47 §9º II
+  da LC 214/2025). Os campos existem no Anexo VI, mas a referência de **retorno** da Focus
+  respondeu **HTTP 403**. **Nenhuma coluna foi criada** para isso de propósito: coluna sem
+  quem a preencha é o defeito que o A6 corrigiu.
+- **`cIndOp`** não é preenchido, e 37 dos 86 itens da categoria A têm mais de um possível.
+  É `0-1` no leiaute, então não gera rejeição hoje.
+
+**Dois são decisão contábil, não técnica:**
+
+- **`cClassTribReg`** — qual par declarar no `gTribRegular`. Sem isso, `550016` (Reidi) e
+  `550022` (Rehidro) são **recusados na criação da nota** (falha fechada). Nenhum dos dois
+  é correlacionado pelo Anexo VIII, então a UI nunca os oferece.
+- **Correlação atividade ↔ regime diferenciado** (a outra metade do C7) e a **regra de
+  crédito do Simples** (a outra metade do A6).
+
+**Com prazo:** as empresas precisam comunicar **em setembro de 2026** se ficam no regime
+unificado ou migram para o híbrido (art. 41 §3º da LC 214/2025). O modelo do A6 já
+comporta as duas respostas; falta a tela avisar quem ainda não decidiu.
 
 ### 🟡 Médio
 
 - **M7** — `regime_ibscbs` de texto para enum (precisa de migration + types).
 - **M8** — totais de CBS/IBS no dashboard.
 - **RPC com `SUM()`** para o faturamento do mês (hoje ainda traz linhas do mês).
-- Parse e persistência do **lado calculado** do retorno (`ResultadoCalculoIBSCBS`):
-  município de incidência, `vBC` efetivo, alíquotas e valores por esfera. É o dado de
-  auditoria que prova o que o Fisco calculou. Hoje se perde.
+- Parse e persistência do **lado calculado** do retorno — promovido para Alto (§6) depois
+  da pesquisa: os campos oficiais são conhecidos, o que falta são os nomes na resposta da
+  Focus.
 
 ### 🔵 Depende só de dado oficial (implementação mecânica depois)
 
-Alíquotas de referência de 2027+ (Resolução do Senado) · Anexo VIII (correlação NBS ↔
-cClassTrib) · Anexo VII (`cIndOp`) · `dIniVig`/`dFimVig` por cClassTrib · caminho XML de
-`opSimpNac`/`regApIBSCBSSN` · **XSD oficial** (nunca foi possível baixar: `.gov.br`
-bloqueado por proxy nas pesquisas; exige alguém baixar manualmente).
+**Resolvidos em 10/08/2026 pela pesquisa (§5.5):** Anexo VIII (correlação, agora em
+`item_lc116_cclasstrib`) · Anexo VII (`cIndOp`, baixado) · `dIniVig`/`dFimVig` por
+cClassTrib (colunas `vigencia_*`) · caminho XML de `opSimpNac`/`regApIBSCBSSN` (fica em
+`prest/regTrib/`, **fora** do grupo IBSCBS; `opSimpNac` é `1-1`).
+
+**Ainda abertos:** alíquotas de referência de 2027+ (Resolução do Senado) · **XSD
+oficial** — o `.gov.br` responde normalmente agora, então os `.xlsx` e o PDF foram
+baixados sem problema; o XSD segue por baixar.
 
 ### ⚫ Campos da DPS ainda não modelados
 
@@ -419,10 +525,30 @@ sem ele, a base de quem trabalha com reembolso/repasse sai errada por construç�
    0014, que existia só como citação neste handoff. Se um patch é citado mas
    `ls _patches/` não o mostra, ele **não** foi aplicado — procure o arquivo antes de
    reimplementar do zero.
-6. **Sem Docker neste ambiente.** `supabase gen types` não roda nem com `--db-url`. Dá
-   para subir um **Postgres 16 local** (`initdb` como usuário não-root — o Postgres recusa
-   rodar como root) com um shim de `auth`/`storage` e validar as migrations de verdade.
-   Foi assim que os CHECKs do vBC e os índices foram verificados.
+9. **~~Sem Docker neste ambiente~~ — isso mudou.** A restrição valia para o ambiente do
+   agente anterior. Na máquina do usuário o stack local roda, e o agente **consegue**
+   executar `npx supabase db reset`, `gen types` e consultar o Postgres via
+   `docker exec -i supabase_db_agenca-fiscal-saas psql -U postgres -d postgres`. Isso
+   encurta o ciclo: valide a migration você mesmo antes de devolver a bola.
+10. **RLS não é privilégio.** Ver §5.6. Policy sem `GRANT` dá "permission denied" em banco
+    novo, e o sintoma aparece longe da causa. Toda tabela nova precisa de policy **e** de
+    grant explícito.
+11. **`.xlsx` oficial tem células mescladas.** O Anexo VIII tem 2258. Leitura ingênua
+    devolve vazio onde há valor herdado, e a saúde inteira (04.02–04.21) somiria da
+    correlação. Expanda os `mergeCells` antes de concluir qualquer coisa — e desconfie de
+    "este item não tem regra".
+12. **`NUMERIC(p,s)` com percentual.** `NUMERIC(7,5)` só vai até 99,99999 e a tabela tem
+    reduções de 100%. Um `db reset` morreu nisso. Se a coluna guarda percentual, trave o
+    intervalo com CHECK — fração e percentual são ambos números plausíveis, e trocar um
+    pelo outro passa despercebido.
+13. **`.select()` do supabase-js precisa de string LITERAL.** Concatenar com `+` devolve
+    `string` e o resultado vira `GenericStringError`, com erro de tipo em cada campo.
+14. **`upsert` em lote exige satisfazer os NOT NULL** mesmo quando o desfecho é UPDATE — o
+    PostgREST monta `INSERT ... ON CONFLICT`. Se a tabela tem coluna NOT NULL que a fonte
+    não fornece, separe UPDATE de INSERT.
+15. **`process.exit()` em script Node no Windows** com handles HTTP abertos dispara
+    assertion do libuv e o processo morre com `0xC0000409`, engolindo o código de saída.
+    Use `process.exitCode` e deixe o loop drenar.
 
 ---
 
@@ -432,16 +558,45 @@ Toda a lista da versão anterior foi concluída em 10/08/2026: estado verificado
 `database.ts` destravado (§4), B7 (`d3728ee`), 0014 recuperado (`13c62fd`), A1
 (`89bffb0`), C7 (`bccd178`+`b3683f7`), A7 (`bccd178`) e A6 (`6bf3945`).
 
-O que resta está em §6. A regra que não muda: **A7 e C7 mostraram que perguntar custa uma
-mensagem e escolher errado custa uma migration.** Os itens que sobraram — mapeamento
-negócio → cClassTrib, correlação atividade ↔ regime, regra de crédito do Simples — são
-todos decisão contábil. Perguntar, não escolher sozinho.
+Depois vieram a pesquisa normativa e a classificação A/B/C (§5.5), os GRANTs (§5.6), a
+sincronização das tabelas oficiais e o envio dos componentes à Focus.
+
+O que resta está em §6, e a fronteira ficou nítida:
+
+- **Três itens dependem da Focus** (ajuste de base, lado calculado do retorno, `cIndOp`).
+  Uma conversa na homologação resolve os dois primeiros.
+- **Dois são decisão contábil** (`cClassTribReg`, correlação atividade ↔ regime e regra de
+  crédito do Simples). **Perguntar, não escolher sozinho** — A7 e C7 mostraram que
+  perguntar custa uma mensagem e escolher errado custa uma migration.
+
+### A distinção que organiza o resto do trabalho fiscal
+
+**Correlação ≠ elegibilidade.** O Anexo VIII diz quais códigos se relacionam ao SERVIÇO —
+regra técnica, publicada, rastreável. Se AQUELE contribuinte pode usar um deles depende do
+enquadramento dele, e o sistema não determina isso. Foi essa distinção que permitiu
+automatizar 86 itens com segurança e que impede automatizar os outros. Antes de "facilitar"
+qualquer escolha fiscal, pergunte de que lado da linha ela está.
+
+Corolário prático: **nunca crie coluna sem quem a preencha.** Foi o defeito do A6
+(`simples_por_fora` decorativo) e foi o motivo de o lado calculado do retorno ter ficado
+sem storage — a fonte não deu os nomes dos campos, então a pendência ficou honesta em vez
+de virar schema vazio.
 
 ### Migrations que exigem `db reset` + regeneração de tipos
 
-Quando uma migration mexe em COLUNA, o código que escreve nela só typecheca depois que o
-usuário roda os dois comandos da §4. Nesta sessão isso aconteceu duas vezes (C7 e A6) e o
-fluxo que funcionou foi: escrever a migration → pedir os dois comandos → **verificar** o
-BOM e as colunas em `database.ts` → só então escrever o código. Não commitar migration
-que derruba coluna separada do código que parava de usá-la: deixa `main` num estado em
-que o código contradiz o banco.
+Quando uma migration mexe em COLUNA, o código que escreve nela só typecheca depois do
+`db reset` + `gen types`. **O agente consegue rodar os dois** (armadilha 9) — valide você
+mesmo antes de devolver a bola. Sequência que funcionou: escrever a migration → aplicar →
+**verificar** BOM e colunas em `database.ts` → só então escrever o código. Não commitar
+migration que derruba coluna separada do código que parava de usá-la: deixa `main` num
+estado em que o código contradiz o banco.
+
+### Manter as tabelas fiscais em dia
+
+```bash
+npm run fiscal:sync          # dry-run: mostra o diff, sai 10 se houver pendência
+npm run fiscal:sync:apply    # grava
+```
+
+Vale rodar o dry-run periodicamente: a SVRS republica sem changelog, e o código de saída 10
+serve para um job de CI avisar. Ausências nunca são apagadas e não contam como pendência.
