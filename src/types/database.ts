@@ -104,15 +104,21 @@ export type Database = {
           created_at: string
           cst: string
           descricao: string
+          descricao_oficial: string | null
           ind_cred_pres: boolean
           ind_estorno_cred: boolean
           ind_perc_biocombustivel: boolean
           ind_trib_regular: boolean
+          nome_reduzido: string | null
           perc_reducao_cbs: number | null
+          perc_reducao_cbs_oficial: number | null
           perc_reducao_ibs: number | null
+          perc_reducao_ibs_oficial: number | null
+          publicado_em: string | null
           rb_sn: number | null
           tipo_aliquota: number | null
           url_dispositivo: string | null
+          url_legislacao: string | null
           vigencia_fim: string | null
           vigencia_inicio: string | null
         }
@@ -123,15 +129,21 @@ export type Database = {
           created_at?: string
           cst: string
           descricao: string
+          descricao_oficial?: string | null
           ind_cred_pres?: boolean
           ind_estorno_cred?: boolean
           ind_perc_biocombustivel?: boolean
           ind_trib_regular?: boolean
+          nome_reduzido?: string | null
           perc_reducao_cbs?: number | null
+          perc_reducao_cbs_oficial?: number | null
           perc_reducao_ibs?: number | null
+          perc_reducao_ibs_oficial?: number | null
+          publicado_em?: string | null
           rb_sn?: number | null
           tipo_aliquota?: number | null
           url_dispositivo?: string | null
+          url_legislacao?: string | null
           vigencia_fim?: string | null
           vigencia_inicio?: string | null
         }
@@ -142,15 +154,21 @@ export type Database = {
           created_at?: string
           cst?: string
           descricao?: string
+          descricao_oficial?: string | null
           ind_cred_pres?: boolean
           ind_estorno_cred?: boolean
           ind_perc_biocombustivel?: boolean
           ind_trib_regular?: boolean
+          nome_reduzido?: string | null
           perc_reducao_cbs?: number | null
+          perc_reducao_cbs_oficial?: number | null
           perc_reducao_ibs?: number | null
+          perc_reducao_ibs_oficial?: number | null
+          publicado_em?: string | null
           rb_sn?: number | null
           tipo_aliquota?: number | null
           url_dispositivo?: string | null
+          url_legislacao?: string | null
           vigencia_fim?: string | null
           vigencia_inicio?: string | null
         }
@@ -419,6 +437,79 @@ export type Database = {
           },
         ]
       }
+      fiscal_fonte_versao: {
+        Row: {
+          fonte: string
+          hash_conteudo: string
+          id: number
+          importado_em: string
+          publicado_em: string | null
+          registros: number
+          url: string
+          versao: string | null
+        }
+        Insert: {
+          fonte: string
+          hash_conteudo: string
+          id?: never
+          importado_em?: string
+          publicado_em?: string | null
+          registros: number
+          url: string
+          versao?: string | null
+        }
+        Update: {
+          fonte?: string
+          hash_conteudo?: string
+          id?: never
+          importado_em?: string
+          publicado_em?: string | null
+          registros?: number
+          url?: string
+          versao?: string | null
+        }
+        Relationships: []
+      }
+      item_lc116_cclasstrib: {
+        Row: {
+          cclasstrib: string
+          item_lc116: string
+          ordem: number
+        }
+        Insert: {
+          cclasstrib: string
+          item_lc116: string
+          ordem: number
+        }
+        Update: {
+          cclasstrib?: string
+          item_lc116?: string
+          ordem?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "item_lc116_cclasstrib_cclasstrib_fkey"
+            columns: ["cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "cclasstrib_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "item_lc116_cclasstrib_cclasstrib_fkey"
+            columns: ["cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "cclasstrib_nfse"
+            referencedColumns: ["codigo"]
+          },
+          {
+            foreignKeyName: "item_lc116_cclasstrib_cclasstrib_fkey"
+            columns: ["cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "item_lc116_cclasstrib_nfse"
+            referencedColumns: ["codigo"]
+          },
+        ]
+      }
       notas_fiscais: {
         Row: {
           ajuste_base_centavos: number
@@ -649,6 +740,13 @@ export type Database = {
             referencedColumns: ["codigo"]
           },
           {
+            foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cclasstrib_fkey"
+            columns: ["ibscbs_trib_reg_cclasstrib"]
+            isOneToOne: false
+            referencedRelation: "item_lc116_cclasstrib_nfse"
+            referencedColumns: ["codigo"]
+          },
+          {
             foreignKeyName: "notas_fiscais_ibscbs_trib_reg_cst_fkey"
             columns: ["ibscbs_trib_reg_cst"]
             isOneToOne: false
@@ -764,6 +862,30 @@ export type Database = {
           rb_sn?: number | null
           tipo_aliquota?: number | null
           url_dispositivo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cclasstrib_ibscbs_cst_fkey"
+            columns: ["cst"]
+            isOneToOne: false
+            referencedRelation: "cst_ibscbs"
+            referencedColumns: ["codigo"]
+          },
+        ]
+      }
+      item_lc116_cclasstrib_nfse: {
+        Row: {
+          artigo_lc214: string | null
+          codigo: string | null
+          cst: string | null
+          descricao_oficial: string | null
+          ind_cred_pres: boolean | null
+          ind_trib_regular: boolean | null
+          item_lc116: string | null
+          ordem: number | null
+          perc_reducao_cbs: number | null
+          perc_reducao_ibs: number | null
+          url_legislacao: string | null
         }
         Relationships: [
           {

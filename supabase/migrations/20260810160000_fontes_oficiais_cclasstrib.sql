@@ -59,9 +59,11 @@ ALTER TABLE cclasstrib_ibscbs
   ADD COLUMN IF NOT EXISTS vigencia_inicio         DATE,
   ADD COLUMN IF NOT EXISTS vigencia_fim            DATE,
   ADD COLUMN IF NOT EXISTS url_legislacao          TEXT,
-  -- Reducoes como a fonte publica (percentual), ao lado das nossas em fracao.
-  ADD COLUMN IF NOT EXISTS perc_reducao_ibs_oficial NUMERIC(7,5),
-  ADD COLUMN IF NOT EXISTS perc_reducao_cbs_oficial NUMERIC(7,5),
+  -- Reducoes como a fonte publica: PERCENTUAL (60.0), nao fracao. Por isso
+  -- NUMERIC(8,5) e nao (7,5) — precision 7 com scale 5 so comporta ate
+  -- 99.99999, e 12 codigos da tabela tem reducao de 100%.
+  ADD COLUMN IF NOT EXISTS perc_reducao_ibs_oficial NUMERIC(8,5),
+  ADD COLUMN IF NOT EXISTS perc_reducao_cbs_oficial NUMERIC(8,5),
   ADD COLUMN IF NOT EXISTS publicado_em            DATE;
 
 COMMENT ON COLUMN cclasstrib_ibscbs.descricao_oficial IS
@@ -285,10 +287,18 @@ FROM (VALUES
 WHERE c.codigo = v.codigo;
 
 -- Coerencia com a fracao que o codigo consome: se as duas deixarem de bater,
--- alguem mexeu numa sem mexer na outra.
+-- alguem mexeu numa sem mexer na outra. O intervalo tambem e travado: a coluna
+-- guarda PERCENTUAL, e um valor acima de 100 aqui significa que alguem gravou
+-- fracao no lugar errado (ou o contrario) — falha que passaria despercebida
+-- justamente por os dois formatos serem numeros plausiveis.
 ALTER TABLE cclasstrib_ibscbs
-  DROP CONSTRAINT IF EXISTS chk_reducao_fracao_x_percentual;
+  DROP CONSTRAINT IF EXISTS chk_reducao_fracao_x_percentual,
+  DROP CONSTRAINT IF EXISTS chk_reducao_oficial_percentual;
 ALTER TABLE cclasstrib_ibscbs
+  ADD CONSTRAINT chk_reducao_oficial_percentual CHECK (
+    (perc_reducao_ibs_oficial IS NULL OR perc_reducao_ibs_oficial BETWEEN 0 AND 100)
+    AND (perc_reducao_cbs_oficial IS NULL OR perc_reducao_cbs_oficial BETWEEN 0 AND 100)
+  ),
   ADD CONSTRAINT chk_reducao_fracao_x_percentual CHECK (
     perc_reducao_ibs_oficial IS NULL
     OR (ABS(perc_reducao_ibs * 100 - perc_reducao_ibs_oficial) < 0.001
