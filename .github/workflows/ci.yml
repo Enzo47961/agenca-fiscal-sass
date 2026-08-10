@@ -1,0 +1,70 @@
+name: CI
+
+# Item A1 da auditoria. É a causa-raiz sistêmica por trás de vários achados:
+# sem isto, nada garante que um commit em `main` compila, passa no lint e passa
+# nos testes — e o repositório já ficou dias num estado em que não passava.
+#
+# Roda exatamente a Definition of Done do CLAUDE.md, na mesma ordem:
+#   typecheck && lint && test && build
+#
+# Honestidade sobre o alcance: este workflow garante que todo commit em `main`
+# é verde. Ele NÃO teria pego o incidente de 06–10/08/2026 (commits cuja
+# mensagem não correspondia ao conteúdo), porque o código antigo também
+# compilava e passava nos testes. Para esse tipo de problema a defesa é a
+# verificação descrita na §3.1 do HANDOFF, não CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Um push novo cancela a execução anterior do mesmo branch — não faz sentido
+# esperar o CI de um commit que já foi substituído.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dod:
+    name: Definition of Done
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # O `next build` pré-renderiza páginas que chamam `publicEnv()` (login,
+      # landing), e o schema Zod recusa valor ausente ou malformado. Estes são
+      # valores de FORMA VÁLIDA e sem nenhum segredo: existem só para o build
+      # ter o que validar. Nada aqui alcança um projeto Supabase real — e é
+      # proposital que não alcance, porque CI não deve tocar dado de ninguém.
+      NEXT_PUBLIC_SUPABASE_URL: https://exemplo.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: chave-anon-de-ci-sem-valor-real
+      NEXT_PUBLIC_WHATSAPP_SUPORTE: "5511999999999"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` e não `npm install`: respeita o package-lock.json à risca, e
+      # falha se ele estiver dessincronizado do package.json — que é
+      # exatamente o que se quer saber num CI.
+      - name: Instalar dependências
+        run: npm ci
+
+      # Os quatro passos ficam separados de propósito: quando um quebra, o
+      # nome do step já diz qual é, sem abrir o log.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Testes
+        run: npm run test
+
+      - name: Build
+        run: npm run build
