@@ -310,6 +310,7 @@ describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
 function dbFiscal(opcoes: {
   correlacao?: Array<Record<string, unknown>>;
   reducao?: { perc_reducao_ibs: number; perc_reducao_cbs: number } | null;
+  exigeTribRegular?: boolean;
 }) {
   let payload: Record<string, unknown> = {};
   const db = fakeSupabase((ctx: FakeCtx) => {
@@ -329,11 +330,21 @@ function dbFiscal(opcoes: {
       const filtraCodigo = ctx.chamadas.some((c) => c.metodo === "eq");
       if (filtraCodigo) {
         return {
-          data: opcoes.reducao ? { codigo: "200029", ...opcoes.reducao } : null,
+          data: opcoes.reducao
+            ? {
+                codigo: "200029",
+                ind_trib_regular: opcoes.exigeTribRegular ?? false,
+                ind_cred_pres: false,
+                ...opcoes.reducao,
+              }
+            : null,
           error: null,
         };
       }
-      return { data: [{ codigo: "000001" }, { codigo: "200029" }], error: null };
+      return {
+        data: [{ codigo: "000001" }, { codigo: "200029" }, { codigo: "550016" }],
+        error: null,
+      };
     }
     return { data: null, error: null };
   });
@@ -494,5 +505,38 @@ describe("solicitarEmissao — cClassTrib com redução exige a confirmação do
 
     expect(payload().ibscbs_cclasstrib).toBe("000001");
     expect(payload().regime_confirmado_por).toBeNull();
+  });
+});
+
+describe("solicitarEmissao — codigo que exige gTribRegular falha fechado", () => {
+  beforeEach(() => limparCacheDominioFiscal());
+
+  it("recusa a nota em vez de emitir sem o grupo obrigatório", async () => {
+    // RN 733/734 do Anexo VI (E0964/E0965): o grupo é obrigatório para esses
+    // códigos. Emitir sem ele é rejeição; inventar o par CSTReg/cClassTribReg
+    // seria pior, porque a nota passaria declarando algo não verificado.
+    const { db } = dbFiscal({
+      correlacao: [],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+      exigeTribRegular: true,
+    });
+
+    await expect(
+      solicitarEmissao(db, {
+        ...base,
+        declaracaoIbsCbs: { cst: "550", cClassTrib: "550016" },
+      }),
+    ).rejects.toThrow(/tributação regular/i);
+  });
+
+  it("código que NÃO exige o grupo passa normalmente", async () => {
+    const { db, payload } = dbFiscal({
+      correlacao: [OPCAO_INTEGRAL],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+      exigeTribRegular: false,
+    });
+
+    await solicitarEmissao(db, base);
+    expect(payload().ibscbs_cclasstrib).toBe("000001");
   });
 });

@@ -121,34 +121,50 @@ export async function correlacaoDoItem(
   return classificarCorrelacao(item, opcoes);
 }
 
+/** O que a tabela oficial diz sobre um cClassTrib e que muda o comportamento. */
+export interface AtributosCClassTrib {
+  reducao: ReducaoOficial;
+  /** `exigeGrupoTributacaoRegular` — RN 166/167 e 733/734 do Anexo VI. */
+  exigeTribRegular: boolean;
+  permiteCredPres: boolean;
+}
+
 /**
- * Redução oficial de um cClassTrib, para o cálculo do destaque.
+ * Atributos oficiais de um cClassTrib.
  *
- * É o que faz as RN 104/111/118 do Anexo VI serem respeitadas: o percentual
- * usado no cálculo passa a ser o da tabela, não o derivado do nosso enum. Ver
+ * A redução é o que faz as RN 104/111/118 serem respeitadas: o percentual do
+ * cálculo passa a ser o da tabela, não o derivado do nosso enum. Ver
  * `fatoresReducao()` em lib/fiscal/reforma.ts.
  *
- * Devolve `null` quando o código não existe — quem chama decide, e no caso da
- * criação de nota a validação do grupo já terá recusado antes.
+ * `exigeTribRegular` vem junto porque decide se a nota PODE ser emitida: o
+ * grupo `gTribRegular` é obrigatório para esses códigos e ainda não sabemos
+ * qual par CSTReg/cClassTribReg declarar.
+ *
+ * Devolve `null` quando o código não existe — quem chama decide, e na criação
+ * de nota a validação do grupo já terá recusado antes.
  */
-export async function carregarReducaoOficial(
+export async function carregarAtributosCClassTrib(
   db: SupabaseClient<Database>,
   cClassTrib: string,
-): Promise<ReducaoOficial | null> {
+): Promise<AtributosCClassTrib | null> {
   const { data, error } = await db
     .from("cclasstrib_ibscbs")
-    .select("codigo, perc_reducao_ibs, perc_reducao_cbs")
+    .select("codigo, perc_reducao_ibs, perc_reducao_cbs, ind_trib_regular, ind_cred_pres")
     .eq("codigo", cClassTrib)
     .maybeSingle();
 
   if (error) {
-    throw new Error(`Falha ao carregar a redução oficial de ${cClassTrib}: ${error.message}`);
+    throw new Error(`Falha ao carregar atributos de ${cClassTrib}: ${error.message}`);
   }
   if (!data) return null;
 
   return {
-    cClassTrib: data.codigo,
-    ibs: Number(data.perc_reducao_ibs ?? 0),
-    cbs: Number(data.perc_reducao_cbs ?? 0),
+    reducao: {
+      cClassTrib: data.codigo,
+      ibs: Number(data.perc_reducao_ibs ?? 0),
+      cbs: Number(data.perc_reducao_cbs ?? 0),
+    },
+    exigeTribRegular: Boolean(data.ind_trib_regular),
+    permiteCredPres: Boolean(data.ind_cred_pres),
   };
 }

@@ -6,7 +6,7 @@ import {
   type EmitirNfseResult,
   type FiscalProvider,
 } from "../provider";
-import { validarDeclaracao } from "../ibscbs";
+import { OP_SIMP_NAC, REG_AP_IBSCBS_SN, validarDeclaracao } from "../ibscbs";
 
 /**
  * Provider fiscal Focus NFe (regra 21 do CLAUDE.md).
@@ -432,29 +432,56 @@ export class FocusNfeProvider implements FiscalProvider {
   /**
    * Traduz o nosso `EmitirNfseInput` no JSON da Focus NFe.
    *
-   * GRUPO IBSCBS (item C5): quando `servico.reforma.declaracao` está
-   * preenchida, enviamos o `cClassTrib` no campo que a Focus documenta
-   * (`ibs_cbs_classificacao_tributaria`). Os 3 primeiros dígitos do cClassTrib
-   * SÃO o CST — a regra estrutural da tabela oficial —, então esse único campo
-   * carrega os dois códigos, e é por isso que não inventamos um nome de campo
-   * separado para o CST, que a documentação da Focus não expõe.
+   * GRUPO IBSCBS: quando `servico.reforma.declaracao` está preenchida, vão o
+   * CST e o cClassTrib em campos SEPARADOS. A versão anterior mandava só o
+   * cClassTrib, com a justificativa de que os 3 primeiros dígitos já são o CST
+   * e de que a Focus não expunha campo próprio — a segunda metade estava
+   * errada: `ibs_cbs_situacao_tributaria` existe, e o leiaute do Anexo VI trata
+   * CST e cClassTrib como dois campos `1-1` distintos na DPS.
    *
-   * Quando a declaração é `null`, nada da reforma é enviado e a nota sai com o
-   * tratamento padrão do município. É o estado normal hoje: não há data
-   * confirmada de obrigatoriedade de preenchimento do grupo na NFS-e.
+   * O vBC NÃO É ENVIADO, e isso está correto. No Anexo VI o campo mora em
+   * `NFSe/infNFSe/IBSCBS/valores/vBC` — lado NFS-e, CALCULADO pelo Ambiente de
+   * Dados Nacional a partir do que a DPS declara. A DPS envia os componentes:
+   * `vServ` (1-1) e `vDescIncond` (0-1). Empurrar um vBC pronto seria mandar
+   * conta feita para quem faz a conta, e divergência ali é rejeição. O nosso
+   * `baseCalculo` continua valendo como prévia na tela e como base de
+   * conferência contra o que o ADN devolver.
    *
-   * PENDÊNCIA — `servico.reforma.baseCalculo` (o vBC da NT-009) CHEGA aqui mas
-   * NÃO é enviado. Os nomes dos campos de desconto incondicionado, ajuste de
-   * base e vBC na API da Focus não estão na documentação a que tivemos acesso,
-   * e inventar nome de campo é pior que omitir: a nota sairia com o valor no
-   * lugar errado em vez de sair sem ele, e o erro só apareceria na apuração.
-   * `valor_servicos` segue sendo o vServ BRUTO, que é o que aquele campo pede —
-   * não trocar pelo vBC. Confirmar o mapeamento na homologação.
+   * Campos confirmados na referência da Focus para NFS-e nacional
+   * (campos.focusnfe.com.br/nfse_nacional/EmissaoDPSXml.html):
+   *
+   *   ibs_cbs_situacao_tributaria           → CST
+   *   ibs_cbs_classificacao_tributaria      → cClassTrib
+   *   ibs_cbs_credito_codigo_classificacao  → cCredPres
+   *   desconto_incondicionado               → vDescIncond
+   *   valor_pis / valor_cofins              → vPis / vCofins
+   *   codigo_opcao_simples_nacional         → opSimpNac
+   *   regime_tributario_simples_nacional    → regApTribSN
+   *
+   * PENDÊNCIA que resta: o ajuste de base (`vCalcAjusteBCIBSCBS` /
+   * `vCalcAjusteBCLocImoveis`) não aparece na referência de campos da Focus.
+   * Segue sem ser enviado — quem trabalha com reembolso/repasse ou locação de
+   * imóvel terá o ajuste ignorado pelo ADN até o nome ser confirmado na
+   * homologação. `valor_servicos` continua sendo o vServ BRUTO, que é o que
+   * aquele campo pede.
    */
   private montarPayload(input: EmitirNfseInput): Record<string, unknown> {
     const { prestador, tomador, servico } = input;
     const ehCnpj = tomador.cpfCnpj.replace(/\D/g, "").length === 14;
     const declaracao = servico.reforma.declaracao ?? null;
+    const base = servico.reforma.baseCalculo ?? null;
+    const intencao = servico.reforma.intencao ?? null;
+
+    // opSimpNac é 1-1 na DPS (NT-009), mas só temos como preenchê-lo quando a
+    // intenção veio montada. Sem ela, omitimos em vez de chutar "não optante":
+    // afirmar a situação errada perante o Simples é pior que deixar a Focus
+    // aplicar o padrão dela.
+    const opSimpNac = intencao?.situacaoSimplesNacional
+      ? OP_SIMP_NAC[intencao.situacaoSimplesNacional]
+      : undefined;
+    const regApTribSN = intencao?.regimeApuracaoSN
+      ? REG_AP_IBSCBS_SN[intencao.regimeApuracaoSN]
+      : undefined;
 
     return {
       data_emissao: `${servico.competencia}T00:00:00`,
@@ -478,8 +505,21 @@ export class FocusNfeProvider implements FiscalProvider {
         // Reforma: o NBS o sistema já tem e é aceito pela Focus.
         codigo_nbs: servico.codigoNbs ?? undefined,
         // Grupo IBSCBS — só vai quando explicitamente declarado.
+        ibs_cbs_situacao_tributaria: declaracao?.cst ?? undefined,
         ibs_cbs_classificacao_tributaria: declaracao?.cClassTrib ?? undefined,
+        ibs_cbs_credito_codigo_classificacao: declaracao?.cCredPres ?? undefined,
+        // Componentes da base (NT-009). `undefined` quando zero: mandar 0,00
+        // num campo opcional é ruído, e a ausência já significa "não há".
+        desconto_incondicionado: base?.descontoIncondicionadoCentavos
+          ? centavosParaReais(base.descontoIncondicionadoCentavos)
+          : undefined,
+        valor_pis: base?.pisCentavos ? centavosParaReais(base.pisCentavos) : undefined,
+        valor_cofins: base?.cofinsCentavos ? centavosParaReais(base.cofinsCentavos) : undefined,
       },
+      // Regime do prestador perante o Simples Nacional. Fica FORA de `servico`
+      // porque na DPS mora em `prest/regTrib/`, não no grupo do serviço.
+      codigo_opcao_simples_nacional: opSimpNac,
+      regime_tributario_simples_nacional: regApTribSN,
     };
   }
 }

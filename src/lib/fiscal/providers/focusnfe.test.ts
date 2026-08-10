@@ -404,8 +404,10 @@ describe("grupo IBSCBS no payload", () => {
     });
 
     const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
-    // Os 3 primeiros dígitos do cClassTrib SÃO o CST — um campo carrega os dois.
+    // CST e cClassTrib sao campos SEPARADOS na DPS (Anexo VI, ambos 1-1), e a
+    // Focus expoe os dois. A versao anterior mandava so o cClassTrib.
     expect(servico.ibs_cbs_classificacao_tributaria).toBe("200027");
+    expect(servico.ibs_cbs_situacao_tributaria).toBe("200");
   });
 
   it("declaração incoerente é erro PERMANENTE e a nota nem é enviada", async () => {
@@ -547,5 +549,123 @@ describe("validação contra a tabela de domínio", () => {
 
     await provider.emitir(ENTRADA);
     expect(chamou).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Componentes da base e regime do Simples no payload.
+//
+// Campos confirmados na referencia de campos da Focus para NFS-e nacional.
+// O vBC NAO entra: no Anexo VI ele e do lado NFS-e, calculado pelo ADN.
+// ---------------------------------------------------------------------------
+
+describe("componentes da base e Simples Nacional no payload", () => {
+  const comReforma = (extra: Record<string, unknown>) => ({
+    ...ENTRADA,
+    servico: {
+      ...ENTRADA.servico,
+      reforma: { ...ENTRADA.servico.reforma, ...extra },
+    },
+  });
+
+  it("envia desconto incondicionado, PIS e COFINS em reais", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        baseCalculo: {
+          baseCentavos: 71_250,
+          valorServicoCentavos: 100_000,
+          descontoIncondicionadoCentavos: 10_000,
+          ajusteBaseCentavos: 0,
+          tipoAjusteBase: null,
+          issqnCentavos: 4_500,
+          pisCentavos: 1_650,
+          cofinsCentavos: 7_600,
+        },
+      }),
+    );
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    // centavosParaReais devolve STRING com 2 casas — e o que a Focus espera.
+    expect(servico.desconto_incondicionado).toBe("100.00");
+    expect(servico.valor_pis).toBe("16.50");
+    expect(servico.valor_cofins).toBe("76.00");
+  });
+
+  it("NAO envia o vBC — quem calcula a base e o Ambiente de Dados Nacional", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        baseCalculo: {
+          baseCentavos: 71_250,
+          valorServicoCentavos: 100_000,
+          descontoIncondicionadoCentavos: 0,
+          ajusteBaseCentavos: 0,
+          tipoAjusteBase: null,
+          issqnCentavos: 0,
+          pisCentavos: 0,
+          cofinsCentavos: 0,
+        },
+      }),
+    );
+
+    const corpo = chamadas[0]!.corpo as Record<string, Record<string, unknown>>;
+    const servico = corpo.servico!;
+    expect(servico.vBC).toBeUndefined();
+    expect(servico.base_calculo).toBeUndefined();
+    // valor_servicos continua sendo o vServ BRUTO da ENTRADA, nao a base
+    // reduzida (baseCentavos era 71.250, o bruto e outro numero).
+    expect(servico.valor_servicos).toBe(centavosParaReais(ENTRADA.servico.valorCentavos));
+  });
+
+  it("componente zerado nao vira 0,00 no payload", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        baseCalculo: {
+          baseCentavos: 100_000,
+          valorServicoCentavos: 100_000,
+          descontoIncondicionadoCentavos: 0,
+          ajusteBaseCentavos: 0,
+          tipoAjusteBase: null,
+          issqnCentavos: 0,
+          pisCentavos: 0,
+          cofinsCentavos: 0,
+        },
+      }),
+    );
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    expect(servico.desconto_incondicionado).toBeUndefined();
+    expect(servico.valor_pis).toBeUndefined();
+  });
+
+  it("traduz a intencao nos codigos oficiais opSimpNac e regApTribSN", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comReforma({
+        intencao: {
+          regime: "padrao",
+          situacaoSimplesNacional: "me_epp",
+          regimeApuracaoSN: "cbs_sn_ibs_regular",
+        },
+      }),
+    );
+
+    const corpo = chamadas[0]!.corpo as Record<string, unknown>;
+    // Tabela oficial da NT-009: me_epp = 3, cbs_sn_ibs_regular = 2.
+    expect(corpo.codigo_opcao_simples_nacional).toBe(3);
+    expect(corpo.regime_tributario_simples_nacional).toBe(2);
+  });
+
+  it("sem intencao, omite em vez de afirmar 'nao optante'", async () => {
+    // Afirmar a situacao errada perante o Simples e pior que deixar a Focus
+    // aplicar o padrao dela.
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(ENTRADA);
+
+    const corpo = chamadas[0]!.corpo as Record<string, unknown>;
+    expect(corpo.codigo_opcao_simples_nacional).toBeUndefined();
+    expect(corpo.regime_tributario_simples_nacional).toBeUndefined();
   });
 });

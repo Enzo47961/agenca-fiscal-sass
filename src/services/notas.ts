@@ -11,8 +11,8 @@ import {
 } from "@/lib/fiscal/reforma";
 import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
 import {
+  carregarAtributosCClassTrib,
   carregarCClassTribConhecidos,
-  carregarReducaoOficial,
   correlacaoDoItem,
 } from "./dominio-fiscal";
 
@@ -159,9 +159,33 @@ export async function solicitarEmissao(
   // não o enum `RegimeIbsCbs`. As RN 104/111/118 do Anexo VI (rejeições
   // E1543/E1547/E1552) exigem que o percentual informado seja o da tabela;
   // divergência entre os dois lança em `fatoresReducao`, antes do insert.
-  const reducaoOficial = declaracao
-    ? await carregarReducaoOficial(db, declaracao.cClassTrib)
+  const atributos = declaracao
+    ? await carregarAtributosCClassTrib(db, declaracao.cClassTrib)
     : null;
+
+  // FALHA FECHADA. Códigos com `exigeGrupoTributacaoRegular` obrigam o grupo
+  // gTribRegular na DPS (RN 733/734 do Anexo VI, rejeições E0964/E0965), e o
+  // grupo pede o par CSTReg/cClassTribReg — que representa a tributação que
+  // incidiria sem o benefício. Nenhuma fonte oficial que encontramos diz QUAL
+  // par declarar; é enquadramento, não regra técnica.
+  //
+  // Emitir sem o grupo seria rejeição certa; inventar o par seria pior, porque
+  // a nota passaria e declararia algo que ninguém verificou. Recusamos.
+  //
+  // Alcance real hoje: só 550016 (Reidi) e 550022 (Rehidro) entre os 71 códigos
+  // de NFS-e, e nenhum dos dois é correlacionado pelo Anexo VIII — a UI nunca
+  // os oferece. Esta trava existe para o caminho de API e para o campo livre
+  // da categoria C.
+  if (atributos?.exigeTribRegular) {
+    throw new Error(
+      `O código ${declaracao?.cClassTrib} exige o grupo de tributação regular ` +
+        "(gTribRegular), que ainda não emitimos: falta definir qual CST/cClassTrib de " +
+        "tributação regular declarar, e isso é enquadramento, não regra técnica. " +
+        "Escolha outro código ou fale com seu contador antes de emitir.",
+    );
+  }
+
+  const reducaoOficial = atributos?.reducao ?? null;
 
   // Declarar um cClassTrib COM redução é afirmar enquadramento — a mesma
   // afirmação que o C7 exige para regime diferenciado, só que dita pelo código
