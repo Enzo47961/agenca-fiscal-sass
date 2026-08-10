@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  ReducaoDivergenteError,
   baseDeColunas,
   calcularBaseIbsCbs,
   calcularTributosReforma,
+  fatoresReducao,
   ULTIMO_ANO_PIS_COFINS,
 } from "@/lib/fiscal/reforma";
 
@@ -302,5 +304,91 @@ describe("baseDeColunas", () => {
     // uma nota com base calculada — `?? null` no lugar errado a trataria como
     // nota antiga.
     expect(baseDeColunas({ ...colunas, ibscbs_base_centavos: 0 })?.baseCentavos).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Correção transversal: a redução vem da tabela oficial do cClassTrib, não do
+// enum RegimeIbsCbs. RN 104/111/118 do Anexo VI (E1543/E1547/E1552).
+// ---------------------------------------------------------------------------
+describe("fatoresReducao — tabela oficial manda sobre o enum", () => {
+  it("sem cClassTrib declarado, o enum continua decidindo", () => {
+    expect(fatoresReducao({ regime: "reducao_60" })).toEqual({ ibs: 0.4, cbs: 0.4 });
+    expect(fatoresReducao({ regime: "padrao" })).toEqual({ ibs: 1, cbs: 1 });
+  });
+
+  it("regime padrão apenas ACEITA a redução oficial — não é divergência", () => {
+    // `padrao` é o default de quem não escolheu nada; a tabela preenche.
+    expect(
+      fatoresReducao({ regime: "padrao", oficial: { cClassTrib: "200029", ibs: 0.6, cbs: 0.6 } }),
+    ).toEqual({ ibs: 0.4, cbs: 0.4 });
+  });
+
+  it("regime e tabela concordando passa", () => {
+    expect(
+      fatoresReducao({
+        regime: "reducao_60",
+        oficial: { cClassTrib: "200029", ibs: 0.6, cbs: 0.6 },
+      }),
+    ).toEqual({ ibs: 0.4, cbs: 0.4 });
+  });
+
+  it("regime e tabela discordando LANÇA, citando a rejeição", () => {
+    expect(() =>
+      fatoresReducao({
+        regime: "reducao_30",
+        oficial: { cClassTrib: "200029", ibs: 0.6, cbs: 0.6 },
+      }),
+    ).toThrow(ReducaoDivergenteError);
+
+    try {
+      fatoresReducao({
+        regime: "reducao_30",
+        oficial: { cClassTrib: "200029", ibs: 0.6, cbs: 0.6 },
+      });
+    } catch (e) {
+      expect((e as Error).message).toMatch(/E1543/);
+      expect((e as ReducaoDivergenteError).cClassTrib).toBe("200029");
+    }
+  });
+
+  it("suporta a redução assimétrica do 200025 (60% IBS / 100% CBS)", () => {
+    // É o único código da tabela com IBS != CBS, e foi o que justificou
+    // colunas separadas no banco.
+    expect(
+      fatoresReducao({ regime: "padrao", oficial: { cClassTrib: "200025", ibs: 0.6, cbs: 1.0 } }),
+    ).toEqual({ ibs: 0.4, cbs: 0 });
+  });
+
+  it("recusa percentual cru no lugar de fração — bug de importação", () => {
+    expect(() =>
+      fatoresReducao({ regime: "padrao", oficial: { cClassTrib: "200029", ibs: 60, cbs: 60 } }),
+    ).toThrow(/fração/);
+  });
+});
+
+describe("calcularTributosReforma com redução oficial", () => {
+  it("aplica a redução do cClassTrib ao destaque e registra a origem", () => {
+    const t = calcularTributosReforma({
+      baseCentavos: 100_000,
+      competencia: "2026-07-18",
+      regime: "padrao",
+      reducaoOficial: { cClassTrib: "200029", ibs: 0.6, cbs: 0.6 },
+    });
+    // CBS 0,9% x (1 - 0,6) = 0,36% de 1.000,00 = 360 centavos
+    expect(t.cbsValorCentavos).toBe(360);
+    expect(t.ibsValorCentavos).toBe(40);
+    expect(t.reducaoDe).toBe("200029");
+  });
+
+  it("assimetria do 200025 chega ao valor destacado", () => {
+    const t = calcularTributosReforma({
+      baseCentavos: 100_000,
+      competencia: "2026-07-18",
+      regime: "padrao",
+      reducaoOficial: { cClassTrib: "200025", ibs: 0.6, cbs: 1.0 },
+    });
+    expect(t.ibsValorCentavos).toBe(40); // 0,1% x 0,4
+    expect(t.cbsValorCentavos).toBe(0); // zerada
   });
 });

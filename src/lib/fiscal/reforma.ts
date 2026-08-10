@@ -411,12 +411,106 @@ export function baseDeColunas(nota: {
   };
 }
 
+/**
+ * Redução publicada na tabela oficial de cClassTrib, em FRAÇÃO (0.6 = 60%).
+ * `perc_reducao_ibs` / `perc_reducao_cbs` de `cclasstrib_ibscbs`.
+ */
+export interface ReducaoOficial {
+  cClassTrib: string;
+  ibs: number;
+  cbs: number;
+}
+
+/**
+ * Erro de coerência entre o regime escolhido na nota e a redução que a tabela
+ * oficial associa ao cClassTrib declarado.
+ *
+ * Não é preciosismo nosso: as regras de negócio 104, 111 e 118 do Anexo VI
+ * (rejeições E1543, E1547 e E1552) dizem que o percentual redutor informado
+ * "deve ser o mesmo indicado para o código da classificação tributária". Uma
+ * nota com os dois divergindo é rejeitada pelo Ambiente de Dados Nacional — e
+ * descobrir isso no motor, com a nota já criada, é tarde demais.
+ */
+export class ReducaoDivergenteError extends Error {
+  readonly kind = "reducao_divergente" as const;
+  constructor(
+    message: string,
+    readonly cClassTrib: string,
+    readonly regime: RegimeIbsCbs,
+  ) {
+    super(message);
+    this.name = "ReducaoDivergenteError";
+  }
+}
+
+const pct = (fracao: number) => `${(fracao * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
+
+/**
+ * Fator que multiplica a alíquota de referência, por tributo.
+ *
+ * Quando há cClassTrib declarado, a tabela oficial MANDA — ela é a fonte que o
+ * Fisco confere. O enum `RegimeIbsCbs` continua existindo para a nota sem
+ * declaração (modelo antigo) e para a UI, mas deixa de decidir o número.
+ *
+ * Se os dois discordarem, isto LANÇA em vez de escolher um. Escolher
+ * silenciosamente seria pior nas duas direções: preferir o enum emitiria nota
+ * que a RN 104/111/118 rejeita; preferir a tabela sem avisar esconderia que a
+ * tela ofereceu ao usuário um regime que o código dele não comporta.
+ */
+export function fatoresReducao(params: {
+  regime: RegimeIbsCbs;
+  oficial?: ReducaoOficial | null;
+}): { ibs: number; cbs: number } {
+  const doRegime = FATOR_REGIME[params.regime];
+  if (!params.oficial) {
+    return { ibs: doRegime, cbs: doRegime };
+  }
+
+  const { cClassTrib, ibs, cbs } = params.oficial;
+  for (const [tributo, reducao] of [
+    ["IBS", ibs],
+    ["CBS", cbs],
+  ] as const) {
+    if (reducao < 0 || reducao > 1) {
+      throw new ReducaoDivergenteError(
+        `Redução de ${tributo} fora de 0..1 para o cClassTrib ${cClassTrib}: ${reducao}. ` +
+          "A tabela guarda fração (0.6 = 60%); percentual cru aqui é bug de importação.",
+        cClassTrib,
+        params.regime,
+      );
+    }
+  }
+
+  const fator = { ibs: 1 - ibs, cbs: 1 - cbs };
+
+  // Divergência só é erro quando o usuário afirmou um regime específico. Com
+  // `padrao` — que é o default de quem não escolheu nada — a tabela apenas
+  // preenche o que ninguém tinha informado.
+  if (params.regime !== "padrao") {
+    const difere = Math.abs(fator.ibs - doRegime) > 1e-9 || Math.abs(fator.cbs - doRegime) > 1e-9;
+    if (difere) {
+      throw new ReducaoDivergenteError(
+        `Regime "${params.regime}" implica redução de ${pct(1 - doRegime)}, mas o cClassTrib ` +
+          `${cClassTrib} tem redução oficial de ${pct(ibs)} (IBS) e ${pct(cbs)} (CBS). ` +
+          "As regras 104, 111 e 118 do Anexo VI exigem que o percentual informado seja o da " +
+          "tabela — a nota seria rejeitada (E1543/E1547/E1552). Corrija o regime ou o código.",
+        cClassTrib,
+        params.regime,
+      );
+    }
+  }
+
+  return fator;
+}
+
 export interface TributosReforma {
   regime: RegimeIbsCbs;
   cbsAliquota: number;
   ibsAliquota: number;
   cbsValorCentavos: Centavos;
   ibsValorCentavos: Centavos;
+  /** cClassTrib cuja redução oficial foi aplicada, quando houve. */
+  reducaoDe?: string | null;
 }
 
 /** Arredonda uma fração de alíquota para 4 casas (compatível com NUMERIC(6,4)). */
@@ -435,16 +529,21 @@ export function calcularTributosReforma(params: {
   regime: RegimeIbsCbs;
   /** Alíquotas publicadas depois desta implementação — ver aliquotasReferencia. */
   overridesAliquotas?: OverridesAliquotas;
+  /**
+   * Redução da tabela oficial do cClassTrib declarado. Quando presente, é ELA
+   * que decide o percentual — ver `fatoresReducao`.
+   */
+  reducaoOficial?: ReducaoOficial | null;
 }): TributosReforma {
   const { baseCentavos, competencia, regime } = params;
   if (!Number.isInteger(baseCentavos) || baseCentavos < 0) {
     throw new Error("baseCentavos deve ser inteiro >= 0 (centavos)");
   }
   const base = aliquotasReferencia(competencia, params.overridesAliquotas);
-  const fator = FATOR_REGIME[regime];
+  const fator = fatoresReducao({ regime, oficial: params.reducaoOficial });
 
-  const cbsAliquota = arredondar4(base.cbs * fator);
-  const ibsAliquota = arredondar4(base.ibs * fator);
+  const cbsAliquota = arredondar4(base.cbs * fator.cbs);
+  const ibsAliquota = arredondar4(base.ibs * fator.ibs);
 
   return {
     regime,
@@ -452,5 +551,6 @@ export function calcularTributosReforma(params: {
     ibsAliquota,
     cbsValorCentavos: Math.round(baseCentavos * cbsAliquota),
     ibsValorCentavos: Math.round(baseCentavos * ibsAliquota),
+    reducaoDe: params.reducaoOficial?.cClassTrib ?? null,
   };
 }
