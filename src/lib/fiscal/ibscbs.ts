@@ -496,12 +496,29 @@ export const PENDENCIAS_C5 = [
     "resultado e termos nas colunas, o formulário de emissão manual os coleta " +
     "e o motor manda a base ao provider via baseCalculo. O destaque de CBS/IBS " +
     "passou a incidir sobre o vBC, não mais sobre o valor bruto.",
-  "O vBC chega ao provider mas NÃO é enviado à Focus: os nomes dos campos de " +
-    "desconto incondicionado, ajuste de base e vBC na API deles não estão na " +
-    "documentação a que tivemos acesso, e inventar nome de campo é pior que " +
-    "omitir — a nota sairia com dado no lugar errado em vez de sair sem ele. " +
-    "Confirmar com a Focus na homologação (mesma pendência do CST, que também " +
-    "não tem campo próprio documentado).",
+  // RESOLVIDA em 10/08/2026 pela referência de campos da Focus para NFS-e
+  // nacional, cruzada com o leiaute do Anexo VI.
+  "RESOLVIDA — o vBC NÃO deve ser enviado, e não é: no Anexo VI ele mora em " +
+    "NFSe/infNFSe/IBSCBS/valores/vBC, lado NFS-e, calculado pelo Ambiente de " +
+    "Dados Nacional. A DPS manda os COMPONENTES, e agora mandamos: CST, " +
+    "cCredPres, desconto incondicionado, PIS, COFINS, opSimpNac e regApTribSN. " +
+    "O CST tem campo próprio (`ibs_cbs_situacao_tributaria`) — a suposição " +
+    "anterior de que a Focus não o expunha estava errada.",
+  "O ajuste de base (vCalcAjusteBCIBSCBS / vCalcAjusteBCLocImoveis) não aparece " +
+    "na referência de campos da Focus. Segue sem ser enviado: quem trabalha com " +
+    "reembolso/repasse ou locação de imóvel terá o ajuste ignorado pelo Fisco " +
+    "até o nome do campo ser confirmado na homologação.",
+  "Códigos com exigeGrupoTributacaoRegular (550016 Reidi, 550022 Rehidro) são " +
+    "RECUSADOS na criação da nota: o grupo gTribRegular é obrigatório para eles " +
+    "(RN 733/734, E0964/E0965) e nenhuma fonte diz qual par CSTReg/cClassTribReg " +
+    "declarar. É enquadramento, não regra técnica. Nenhum dos dois é " +
+    "correlacionado pelo Anexo VIII, então a UI nunca os oferece.",
+  "O lado CALCULADO do retorno (gTribSN com pIBSSN/vIBSSN/pCBSSN, e " +
+    "vReceitaBrutaSN) é o que prova quanto de crédito o tomador aproveita — " +
+    "art. 47 §9º II da LC 214/2025. Os campos existem no Anexo VI, mas a " +
+    "referência de RETORNO da Focus respondeu HTTP 403 e não deu para descobrir " +
+    "os nomes na resposta deles. NENHUMA coluna foi criada para isso: coluna sem " +
+    "quem a preencha é exatamente o defeito que o A6 corrigiu.",
   "As alíquotas de 2027+ NÃO estão fixadas por Resolução do Senado. " +
     "aliquotasReferencia() agora lança AliquotaNaoFixadaError nesses anos, em " +
     "vez de devolver o par de teste de 2026 — mas isso significa que a emissão " +

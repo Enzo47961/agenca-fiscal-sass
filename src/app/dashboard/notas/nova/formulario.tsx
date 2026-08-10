@@ -285,9 +285,13 @@ export function FormularioEmissao({
                   <p className="mt-2 text-xs text-slate-500">
                     {opcaoEscolhida.artigoLc214 ? <>{opcaoEscolhida.artigoLc214}. </> : null}
                     {opcaoEscolhida.exigeTribRegular ? (
-                      <span className="text-amber-800">
-                        Este código exige o grupo de tributação regular, que ainda não
-                        preenchemos — confirme com seu contador antes de emitir.{" "}
+                      // O serviço RECUSA esses códigos (falha fechada). O texto
+                      // precisa dizer isso: "confirme com seu contador" sugeria
+                      // que dava para prosseguir, e não dá.
+                      <span className="font-medium text-red-700">
+                        Este código exige o grupo de tributação regular, que ainda não emitimos —
+                        a nota será recusada. Falta definir qual CST/cClassTrib de tributação
+                        regular declarar, e isso é enquadramento, não regra técnica.{" "}
                       </span>
                     ) : null}
                     {opcaoEscolhida.urlLegislacao ? (
