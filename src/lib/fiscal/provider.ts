@@ -4,6 +4,7 @@
  * e as duas classes de erro (regras 8 e 21 do CLAUDE.md).
  */
 import { type BaseIbsCbsPersistida, type RegimeIbsCbs } from "./reforma";
+import { type DocumentoAjusteBase } from "./ajuste-base";
 import {
   type DeclaracaoTributariaIBSCBS,
   type IntencaoRegimeTributario,
@@ -121,6 +122,11 @@ export interface EmitirNfseInput {
        * NULL no banco). Nesse caso o provider NÃO deve substituir pelo bruto.
        */
       baseCalculo?: BaseIbsCbsPersistida | null;
+      /**
+       * Documentos que originam o ajuste de base (gReeRepRes). Vão na DPS um a
+       * um; o total NÃO é enviado — quem soma é o Ambiente de Dados Nacional.
+       */
+      documentosAjuste?: readonly DocumentoAjusteBase[];
     };
   };
 }

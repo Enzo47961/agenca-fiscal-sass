@@ -11,6 +11,7 @@ import { resolverProvider } from "@/lib/fiscal/providers";
 import { carregarCClassTribConhecidos } from "@/services/dominio-fiscal";
 import { declaracaoDeColunas, intencaoDeColunas } from "@/lib/fiscal/ibscbs";
 import { baseDeColunas, type RegimeIbsCbs } from "@/lib/fiscal/reforma";
+import { documentosAjusteDeColuna } from "@/lib/fiscal/ajuste-base";
 import {
   FiscalErrorPermanent,
   isFiscalError,
@@ -145,6 +146,10 @@ export const emitirNfse = inngest.createFunction(
                   // faria a nota emitida divergir da nota gravada se a fórmula
                   // ou as alíquotas mudassem entre a criação e o retry.
                   baseCalculo: baseDeColunas(contexto),
+                  // Documentos do ajuste, como gravados. Reconstruir aqui seria
+                  // logica de dominio no motor (armadilha 1): a coluna ja e a
+                  // lista validada na criacao.
+                  documentosAjuste: documentosAjusteDeColuna(contexto.documentos_ajuste_base),
                   // A6 — regime de apuração no Simples, recortado pela
                   // vigência da opção. Depende da empresa E da competência da
                   // nota, por isso é montado a partir das duas.

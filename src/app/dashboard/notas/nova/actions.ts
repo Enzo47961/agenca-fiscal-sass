@@ -76,7 +76,18 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     // Componentes da base de cálculo (B7). Campo em branco → `undefined`, que
     // o schema resolve: zero nos que têm default, derivação no ISSQN.
     descontoIncondicionadoCentavos: reaisParaCentavos(formData.get("descontoIncondicionado")),
-    ajusteBaseCentavos: reaisParaCentavos(formData.get("ajusteBase")),
+    // Lista de objetos aninhados: viaja como JSON porque FormData e plano. O
+    // parse solto devolve `undefined` para o schema recusar com mensagem de
+    // campo, em vez de derrubar a action com SyntaxError.
+    documentosAjusteBase: (() => {
+      const bruto = String(formData.get("documentosAjusteBase") ?? "").trim();
+      if (!bruto) return undefined;
+      try {
+        return JSON.parse(bruto) as unknown;
+      } catch {
+        return undefined;
+      }
+    })(),
     tipoAjusteBase: (formData.get("tipoAjusteBase") as string | null) || undefined,
     issqnCentavos: reaisParaCentavos(formData.get("issqn")),
     pisCentavos: reaisParaCentavos(formData.get("pis")),

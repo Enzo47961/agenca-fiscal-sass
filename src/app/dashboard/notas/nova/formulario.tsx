@@ -2,14 +2,26 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { CheckCircle2, HelpCircle, Loader2, SendHorizonal } from "lucide-react";
+import { CheckCircle2, HelpCircle, Loader2, SendHorizonal, XCircle } from "lucide-react";
 import { consultarCorrelacaoAction, emitirNotaAction, type EmissaoResult } from "./actions";
 import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
-// TIPO_AJUSTE_BASE_LABEL saiu junto com o seletor de ajuste: a DPS não aceita
-// o total, e o rótulo dos dois tipos só voltará quando `gReeRepRes` e `imovel/`
-// forem modelados como grupos de documentos.
+// TIPO_AJUSTE_BASE_LABEL não é mais usado aqui: com o `gReeRepRes` modelado, a
+// única alternativa transmissível é `ibscbs`, mandada num campo oculto.
+// `loc_imoveis` volta a aparecer quando o grupo `imovel/` existir.
 import { REGIME_IBSCBS_LABEL } from "@/lib/fiscal/reforma";
 import { REGIMES_NBS_SOB_DUVIDA } from "@/lib/fiscal/regimes";
+import {
+  MAX_DOCUMENTOS_AJUSTE,
+  TIPO_AJUSTE_DOC_LABEL,
+  TIPO_CHAVE_DFE_LABEL,
+  documentoAjusteBaseSchema,
+  resumoDocumento,
+  somarAjusteBase,
+  type DocumentoAjusteBase,
+  type TipoAjusteDoc,
+  type TipoChaveDFe,
+} from "@/lib/fiscal/ajuste-base";
+import { formatarCentavos } from "@/types/domain";
 
 const inputClasses =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500";
@@ -20,6 +32,224 @@ function Ajuda({ children }: { children: React.ReactNode }) {
       <HelpCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
       <span>{children}</span>
     </p>
+  );
+}
+
+/**
+ * Editor de UM documento de ajuste. Estado local, some ao adicionar.
+ *
+ * Separado do formulário principal porque tem estado próprio e efêmero: um
+ * documento pela metade não pertence à nota até ser adicionado à lista, e
+ * misturar os dois estados faria campos meio preenchidos vazarem para o envio.
+ */
+function DocumentoAjusteEditor({
+  onAdicionar,
+  desabilitado,
+}: {
+  onAdicionar: (d: DocumentoAjusteBase) => void;
+  desabilitado: boolean;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [tipo, setTipo] = useState<TipoAjusteDoc>("01");
+  const [descricaoTipo, setDescricaoTipo] = useState("");
+  const [forma, setForma] = useState<DocumentoAjusteBase["identificacao"]["forma"]>("dfe_nacional");
+  const [tipoChave, setTipoChave] = useState<TipoChaveDFe>("2");
+  const [chave, setChave] = useState("");
+  const [municipio, setMunicipio] = useState("");
+  const [numero, setNumero] = useState("");
+  const [descricaoDoc, setDescricaoDoc] = useState("");
+  const [valor, setValor] = useState("");
+  const [erro, setErro] = useState<string | null>(null);
+
+  function limpar() {
+    setDescricaoTipo("");
+    setChave("");
+    setMunicipio("");
+    setNumero("");
+    setDescricaoDoc("");
+    setValor("");
+    setErro(null);
+  }
+
+  function adicionar() {
+    const centavos = Math.round(Number(valor.replace(/\./g, "").replace(",", ".")) * 100);
+    const identificacao =
+      forma === "dfe_nacional"
+        ? { forma, tipoChaveDFe: tipoChave, chaveDFe: chave.trim(), descricaoTipoChave: descricaoDoc.trim() || null }
+        : forma === "doc_fiscal_outro"
+          ? { forma, codigoMunicipio: municipio.replace(/\D/g, ""), numero: numero.trim(), descricao: descricaoDoc.trim() }
+          : { forma, numero: numero.trim(), descricao: descricaoDoc.trim() };
+
+    // Valida com o MESMO schema do servidor: o erro aparece aqui, com o
+    // documento ainda na tela, em vez de derrubar o envio da nota inteira.
+    const r = documentoAjusteBaseSchema.safeParse({
+      tipo,
+      descricaoTipo: descricaoTipo.trim() || null,
+      valorCentavos: Number.isFinite(centavos) ? centavos : -1,
+      identificacao,
+    });
+    if (!r.success) {
+      setErro(r.error.issues[0]?.message ?? "Documento inválido.");
+      return;
+    }
+    onAdicionar(r.data);
+    limpar();
+    setAberto(false);
+  }
+
+  if (!aberto) {
+    return (
+      <button
+        type="button"
+        disabled={desabilitado}
+        onClick={() => setAberto(true)}
+        className="mt-3 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-medium text-brand-600 hover:border-brand-400 disabled:opacity-50"
+      >
+        {desabilitado ? `Limite de ${MAX_DOCUMENTOS_AJUSTE} documentos` : "+ Referenciar documento"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+      <label className="block">
+        <span className="mb-1 block text-xs text-slate-600">Motivo do repasse/reembolso *</span>
+        <select
+          value={tipo}
+          onChange={(e) => setTipo(e.target.value as TipoAjusteDoc)}
+          className={inputClasses}
+        >
+          {Object.entries(TIPO_AJUSTE_DOC_LABEL).map(([v, rotulo]) => (
+            <option key={v} value={v}>
+              {v} — {rotulo.slice(0, 100)}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {tipo === "99" ? (
+        <label className="block">
+          <span className="mb-1 block text-xs text-slate-600">Descreva o motivo *</span>
+          <input
+            value={descricaoTipo}
+            onChange={(e) => setDescricaoTipo(e.target.value)}
+            className={inputClasses}
+          />
+        </label>
+      ) : null}
+
+      <label className="block">
+        <span className="mb-1 block text-xs text-slate-600">Como o documento é identificado *</span>
+        <select
+          value={forma}
+          onChange={(e) =>
+            setForma(e.target.value as DocumentoAjusteBase["identificacao"]["forma"])
+          }
+          className={inputClasses}
+        >
+          <option value="dfe_nacional">Documento eletrônico com chave (NFS-e, NF-e, CT-e)</option>
+          <option value="doc_fiscal_outro">Documento fiscal sem chave nacional</option>
+          <option value="doc_nao_fiscal">Documento não fiscal (recibo, contrato)</option>
+        </select>
+      </label>
+
+      {forma === "dfe_nacional" ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs text-slate-600">Tipo *</span>
+            <select
+              value={tipoChave}
+              onChange={(e) => setTipoChave(e.target.value as TipoChaveDFe)}
+              className={inputClasses}
+            >
+              {Object.entries(TIPO_CHAVE_DFE_LABEL).map(([v, rotulo]) => (
+                <option key={v} value={v}>
+                  {rotulo}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs text-slate-600">Chave de acesso *</span>
+            <input value={chave} onChange={(e) => setChave(e.target.value)} className={inputClasses} />
+          </label>
+          {tipoChave === "9" ? (
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs text-slate-600">Qual documento? *</span>
+              <input
+                value={descricaoDoc}
+                onChange={(e) => setDescricaoDoc(e.target.value)}
+                className={inputClasses}
+              />
+            </label>
+          ) : null}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {forma === "doc_fiscal_outro" ? (
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-600">Município (IBGE) *</span>
+              <input
+                value={municipio}
+                onChange={(e) => setMunicipio(e.target.value)}
+                inputMode="numeric"
+                maxLength={7}
+                className={inputClasses}
+              />
+            </label>
+          ) : null}
+          <label className="block">
+            <span className="mb-1 block text-xs text-slate-600">Número *</span>
+            <input value={numero} onChange={(e) => setNumero(e.target.value)} className={inputClasses} />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-xs text-slate-600">Descrição *</span>
+            <input
+              value={descricaoDoc}
+              onChange={(e) => setDescricaoDoc(e.target.value)}
+              className={inputClasses}
+            />
+          </label>
+        </div>
+      )}
+
+      <label className="block">
+        <span className="mb-1 block text-xs text-slate-600">Valor do repasse (R$) *</span>
+        <input
+          value={valor}
+          onChange={(e) => setValor(e.target.value)}
+          inputMode="decimal"
+          placeholder="0,00"
+          className={inputClasses}
+        />
+      </label>
+
+      {erro ? (
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+          {erro}
+        </p>
+      ) : null}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={adicionar}
+          className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+        >
+          Adicionar
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            limpar();
+            setAberto(false);
+          }}
+          className="rounded-lg px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -40,6 +270,9 @@ export function FormularioEmissao({
   const [correlacao, setCorrelacao] = useState<CorrelacaoItem | null>(null);
   const [consultando, setConsultando] = useState(false);
   const [cClassTrib, setCClassTrib] = useState("");
+  // Documentos do ajuste de base. O total e derivado — nunca digitado.
+  const [documentos, setDocumentos] = useState<DocumentoAjusteBase[]>([]);
+  const totalAjuste = somarAjusteBase(documentos);
 
   async function buscarCorrelacao(codigo: string) {
     const limpo = codigo.trim();
@@ -459,27 +692,74 @@ export function FormularioEmissao({
             </label>
 
             {/*
-              Ajuste de base: campos desabilitados de propósito.
+              Ajuste de base: LISTA de documentos, não um total.
 
-              A DPS não aceita o total — ela referencia os DOCUMENTOS que
-              originam o reembolso/repasse (um a um, com tipo e valor) e o Fisco
-              soma. Nosso modelo tem só o total, então a nota seria autorizada
-              com base maior que a prévia, em silêncio. O serviço recusa; aqui a
-              tela evita que alguém digite para descobrir isso depois.
+              A DPS referencia cada documento que origina o reembolso/repasse —
+              tipo, identificação e valor — e o Fisco soma. Por isso não há
+              campo de total aqui: ele é derivado e mostrado só como conferência.
             */}
-            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-100/70 px-3 py-2.5">
-              <p className="text-sm text-slate-600">
-                Ajuste de base <span className="text-slate-400">(indisponível)</span>
+            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-white px-4 py-3">
+              <p className="text-sm font-medium text-slate-700">
+                Ajuste de base — reembolso, repasse ou ressarcimento
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                Reembolso, repasse, ressarcimento e locação de imóvel exigem que cada documento
-                de origem seja referenciado na nota — a nota fiscal não aceita apenas o valor
-                total. Enquanto isso não está implementado, emitir com ajuste faria a nota sair
-                com base maior que a calculada aqui, sem aviso. Emita sem o ajuste ou fale
-                conosco.
+                Referencie os documentos já tributados que não integram a sua base. O total é a
+                soma deles: quem calcula o ajuste na nota é o Fisco, a partir do que for
+                referenciado aqui.
               </p>
-              <input type="hidden" name="ajusteBase" value="" />
-              <input type="hidden" name="tipoAjusteBase" value="" />
+
+              {documentos.length > 0 ? (
+                <ul className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200">
+                  {documentos.map((d, i) => (
+                    <li key={i} className="flex items-start gap-3 px-3 py-2 text-xs">
+                      <div className="flex-1">
+                        <p className="font-medium text-slate-700">{resumoDocumento(d)}</p>
+                        <p className="text-slate-500">
+                          {TIPO_AJUSTE_DOC_LABEL[d.tipo].slice(0, 90)}
+                          {d.descricaoTipo ? ` — ${d.descricaoTipo}` : ""}
+                        </p>
+                      </div>
+                      <span className="whitespace-nowrap font-medium text-slate-700">
+                        {formatarCentavos(d.valorCentavos)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDocumentos(documentos.filter((_, j) => j !== i))}
+                        className="text-slate-400 hover:text-red-600"
+                        aria-label={`Remover documento ${i + 1}`}
+                      >
+                        <XCircle className="h-4 w-4" aria-hidden />
+                      </button>
+                    </li>
+                  ))}
+                  <li className="flex justify-between bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+                    <span>Total do ajuste</span>
+                    <span>{formatarCentavos(totalAjuste)}</span>
+                  </li>
+                </ul>
+              ) : null}
+
+              <DocumentoAjusteEditor
+                onAdicionar={(d) => setDocumentos([...documentos, d])}
+                desabilitado={documentos.length >= MAX_DOCUMENTOS_AJUSTE}
+              />
+
+              {/* A lista viaja como JSON: são objetos aninhados, e FormData é plano. */}
+              <input
+                type="hidden"
+                name="documentosAjusteBase"
+                value={JSON.stringify(documentos)}
+              />
+              {/*
+                Só `ibscbs` é oferecido. `loc_imoveis` depende do grupo
+                `imovel/` (unidades imobiliárias, CIB, copropriedade), que não
+                está modelado — oferecer levaria a uma nota que não transmite.
+              */}
+              <input
+                type="hidden"
+                name="tipoAjusteBase"
+                value={documentos.length > 0 ? "ibscbs" : ""}
+              />
             </div>
 
             <label className="block">

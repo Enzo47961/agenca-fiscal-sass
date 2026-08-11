@@ -281,19 +281,13 @@ describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
     ).rejects.toThrow(/negativa/i);
   });
 
-  // A regra "ajuste sem tipo não tem tag onde sair" continua valendo dentro de
-  // calcularBaseIbsCbs (ver base-calculo.test.ts). No serviço ela virou
-  // inalcançável: a recusa do ajuste inteiro acontece antes, porque a DPS não
-  // aceita o total — pede os documentos que o originam.
-  it("recusa QUALQUER ajuste de base, com tipo ou sem", async () => {
+  it("recusa documentos de ajuste sem o tipo do ajuste", async () => {
+    // O tipo diz qual alternativa da fórmula da NT-009 recebe o valor.
     const { db } = dbCapturandoInsert();
 
     await expect(
-      solicitarEmissao(db, { ...base, ajusteBaseCentavos: 1_000 }),
-    ).rejects.toThrow(/documentos/i);
-    await expect(
-      solicitarEmissao(db, { ...base, ajusteBaseCentavos: 1_000, tipoAjusteBase: "ibscbs" }),
-    ).rejects.toThrow(/documentos/i);
+      solicitarEmissao(db, { ...base, documentosAjusteBase: [DOC_AJUSTE] }),
+    ).rejects.toThrow(/tipo do ajuste/i);
   });
 
   it("recusa PIS/COFINS a partir de 2027 antes de criar a nota", async () => {
@@ -356,6 +350,17 @@ function dbFiscal(opcoes: {
   });
   return { db, payload: () => payload };
 }
+
+/** Documento de ajuste valido, no formato oficial (gReeRepRes). */
+const DOC_AJUSTE = {
+  tipo: "01" as const,
+  valorCentavos: 30_000,
+  identificacao: {
+    forma: "dfe_nacional" as const,
+    tipoChaveDFe: "2" as const,
+    chaveDFe: "35260812345678000199550010000000011000000017",
+  },
+};
 
 const OPCAO_INTEGRAL = {
   codigo: "000001",
@@ -607,26 +612,47 @@ describe("solicitarEmissao — tributacao regular informada a mao", () => {
   });
 });
 
-describe("solicitarEmissao — ajuste de base recusado ate gReeRepRes existir", () => {
+describe("solicitarEmissao — ajuste de base pelos documentos (gReeRepRes)", () => {
   beforeEach(() => limparCacheDominioFiscal());
 
-  it("recusa nota com ajuste de base declarado", async () => {
-    // Aceitar produziria o pior desfecho: o total sai da NOSSA base, nao e
-    // transmitido, e a nota e autorizada com base MAIOR que a previa.
-    const { db } = dbFiscal({ correlacao: [], reducao: null });
+  it("deriva o total dos documentos e grava a lista", async () => {
+    const { db, payload } = dbFiscal({ correlacao: [], reducao: null });
 
+    await solicitarEmissao(db, {
+      ...base,
+      valorServicoCentavos: 100_000,
+      issqnCentavos: 0,
+      tipoAjusteBase: "ibscbs",
+      documentosAjusteBase: [DOC_AJUSTE, { ...DOC_AJUSTE, valorCentavos: 5_000 }],
+    });
+
+    const p = payload();
+    // 30.000 + 5.000 — somado da lista, nunca digitado.
+    expect(p.ajuste_base_centavos).toBe(35_000);
+    expect(p.ibscbs_base_centavos).toBe(65_000);
+    expect((p.documentos_ajuste_base as unknown[]).length).toBe(2);
+  });
+
+  it("nota sem documentos continua com ajuste zero", async () => {
+    const { db, payload } = dbFiscal({
+      correlacao: [OPCAO_INTEGRAL],
+      reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 },
+    });
+    await solicitarEmissao(db, base);
+
+    expect(payload().ajuste_base_centavos).toBe(0);
+    expect(payload().documentos_ajuste_base).toEqual([]);
+  });
+
+  it("recusa documento do tipo 99 sem descricao", async () => {
+    const { db } = dbFiscal({ correlacao: [], reducao: null });
     await expect(
       solicitarEmissao(db, {
         ...base,
-        ajusteBaseCentavos: 30_000,
         tipoAjusteBase: "ibscbs",
+        documentosAjusteBase: [{ ...DOC_AJUSTE, tipo: "99", descricaoTipo: "" }],
       }),
-    ).rejects.toThrow(/documentos/i);
-  });
-
-  it("nota sem ajuste segue normalmente", async () => {
-    const { db, payload } = dbFiscal({ correlacao: [OPCAO_INTEGRAL], reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 } });
-    await solicitarEmissao(db, base);
-    expect(payload().ajuste_base_centavos).toBe(0);
+    ).rejects.toThrow();
   });
 });
+

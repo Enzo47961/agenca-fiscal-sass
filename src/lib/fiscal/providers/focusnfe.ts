@@ -7,6 +7,7 @@ import {
   type FiscalProvider,
 } from "../provider";
 import { OP_SIMP_NAC, REG_AP_IBSCBS_SN, validarDeclaracao } from "../ibscbs";
+import { type DocumentoAjusteBase } from "../ajuste-base";
 
 /**
  * Provider fiscal Focus NFe (regra 21 do CLAUDE.md).
@@ -513,6 +514,9 @@ export class FocusNfeProvider implements FiscalProvider {
         ibs_cbs_situacao_tributaria_regular: declaracao?.tribRegular?.cstRegular ?? undefined,
         ibs_cbs_classificacao_tributaria_regular:
           declaracao?.tribRegular?.cClassTribRegular ?? undefined,
+        // gReeRepRes — os documentos que originam o ajuste de base. O TOTAL nao
+        // vai: quem soma e o Ambiente de Dados Nacional.
+        documentos_referenciados: documentosReferenciados(servico.reforma.documentosAjuste),
         // Componentes da base (NT-009). `undefined` quando zero: mandar 0,00
         // num campo opcional é ruído, e a ausência já significa "não há".
         desconto_incondicionado: base?.descontoIncondicionadoCentavos
@@ -530,7 +534,56 @@ export class FocusNfeProvider implements FiscalProvider {
 }
 
 /**
- * AJUSTE DE BASE — por que não existe campo para preencher.
+ * Traduz os documentos de ajuste para a coleção `documentos_referenciados`.
+ *
+ * Nomes conferidos um a um na referência de campos da Focus: `tipo_valor_incluido`
+ * (tpReeRepRes), `valor_repasse` (vlrReeRepRes), `tipo_chave_dfe` (tipoChaveDFe),
+ * `chave_dfe` (chaveDFe), e as duas alternativas para documento fora do
+ * repositório nacional.
+ *
+ * `undefined` quando não há documento: coleção vazia e ausência significam a
+ * mesma coisa para o Fisco, e mandar `[]` é ruído.
+ */
+function documentosReferenciados(
+  docs: readonly DocumentoAjusteBase[] | undefined,
+): Array<Record<string, unknown>> | undefined {
+  if (!docs?.length) return undefined;
+
+  return docs.map((d) => {
+    const id = d.identificacao;
+    const comum = {
+      tipo_valor_incluido: d.tipo,
+      descricao_tipo_valor_incluido: d.descricaoTipo ?? undefined,
+      valor_repasse: centavosParaReais(d.valorCentavos),
+    };
+
+    switch (id.forma) {
+      case "dfe_nacional":
+        return {
+          ...comum,
+          tipo_chave_dfe: id.tipoChaveDFe,
+          descricao_chave_dfe: id.descricaoTipoChave ?? undefined,
+          chave_dfe: id.chaveDFe,
+        };
+      case "doc_fiscal_outro":
+        return {
+          ...comum,
+          codigo_municipio_documento_fiscal_outro: id.codigoMunicipio,
+          numero_documento_fiscal_outro: id.numero,
+          descricao_documento_fiscal_outro: id.descricao,
+        };
+      case "doc_nao_fiscal":
+        return {
+          ...comum,
+          numero_documento_nao_fiscal_outro: id.numero,
+          descricao_documento_nao_fiscal_outro: id.descricao,
+        };
+    }
+  });
+}
+
+/**
+ * AJUSTE DE BASE — por que o TOTAL não é enviado.
  *
  * A suposição anterior (e o andaime que ela gerou) era de que faltava apenas o
  * NOME de um campo escalar. A referência de campos da Focus, lida por inteiro —

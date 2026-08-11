@@ -10,6 +10,7 @@ import {
   calcularTributosReforma,
 } from "@/lib/fiscal/reforma";
 import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
+import { documentosAjusteBaseSchema, somarAjusteBase } from "@/lib/fiscal/ajuste-base";
 import {
   carregarAtributosCClassTrib,
   carregarCClassTribConhecidos,
@@ -47,7 +48,13 @@ export const solicitarEmissaoSchema = z.object({
    * caso comum do prestador de serviço.
    */
   descontoIncondicionadoCentavos: z.number().int().nonnegative().default(0),
-  ajusteBaseCentavos: z.number().int().nonnegative().default(0),
+  /**
+   * Documentos que originam o ajuste de base (gReeRepRes). O TOTAL não é
+   * informado: ele é a soma desta lista. Aceitar um total digitado foi o
+   * modelo anterior, e ele não tinha como ser transmitido — a DPS referencia
+   * documentos, não valores soltos.
+   */
+  documentosAjusteBase: documentosAjusteBaseSchema,
   tipoAjusteBase: z.enum(TIPO_AJUSTE_BASE).nullish(),
   /**
    * vISSQN. OMITIR é diferente de informar ZERO: omitido, o valor é derivado de
@@ -184,24 +191,23 @@ export async function solicitarEmissao(
     );
   }
 
-  // AJUSTE DE BASE — recusa enquanto `gReeRepRes`/`imovel` não forem modelados.
+  // AJUSTE DE BASE — derivado dos documentos, nunca digitado.
   //
-  // A DPS não tem campo escalar para o ajuste: ela referencia DOCUMENTOS
-  // (`documentos_referenciados`, com tipo e valor por documento) e o Ambiente
-  // de Dados Nacional soma, produzindo `vCalcAjusteBCIBSCBS`. Nosso modelo tem
-  // um total, que não vira essa lista.
-  //
-  // Aceitar mesmo assim seria o pior desfecho: o total sai da NOSSA base, não
-  // é transmitido, o ADN calcula a base sem ele, e a nota é autorizada com base
-  // MAIOR que a prévia que mostramos. Divergência silenciosa, descoberta na
-  // apuração. Recusar devolve o problema a quem pode resolvê-lo.
-  if (dados.ajusteBaseCentavos > 0) {
+  // Quem soma de verdade é o Ambiente de Dados Nacional, a partir dos
+  // documentos que a DPS referencia. A soma aqui existe para duas coisas: a
+  // prévia que mostramos e a conferência contra o `vCalcAjusteBCIBSCBS` que o
+  // Fisco devolver. Se os dois divergirem, o erro está de um lado só e dá para
+  // achar — que é o oposto do modelo anterior, em que um total digitado
+  // simplesmente não chegava lá.
+  const ajusteBaseCentavos = somarAjusteBase(dados.documentosAjusteBase);
+
+  // O tipo do ajuste continua sendo exigido pelo cálculo da base: ele diz qual
+  // alternativa da fórmula ocupa o lugar (NT-009). Com documentos e sem tipo, a
+  // conta não sabe onde encaixar o valor.
+  if (ajusteBaseCentavos > 0 && !dados.tipoAjusteBase) {
     throw new Error(
-      "Ajuste de base (reembolso, repasse, ressarcimento ou locação de imóvel) ainda não " +
-        "pode ser transmitido: a nota fiscal exige os DOCUMENTOS que originam o ajuste, " +
-        "um a um, e não o valor total. Enviar só o total faria a nota sair com base maior " +
-        "que a calculada aqui, sem aviso. Emita sem o ajuste ou aguarde o suporte a " +
-        "documentos referenciados.",
+      "Informe o tipo do ajuste de base: reembolso/repasse ou locação de imóvel. " +
+        "São alternativas diferentes na fórmula da base, e o valor precisa saber em qual entra.",
     );
   }
 
@@ -256,7 +262,7 @@ export async function solicitarEmissao(
   const base = calcularBaseIbsCbs({
     valorServicoCentavos: dados.valorServicoCentavos,
     descontoIncondicionadoCentavos: dados.descontoIncondicionadoCentavos,
-    ajusteBaseCentavos: dados.ajusteBaseCentavos,
+    ajusteBaseCentavos,
     tipoAjusteBase: dados.tipoAjusteBase ?? null,
     // `?? undefined` de propósito: `null` do formulário significa "não
     // informado" e precisa chegar como ausência para a derivação acontecer.
@@ -312,6 +318,7 @@ export async function solicitarEmissao(
       ibscbs_base_centavos: base.baseCentavos,
       desconto_incondicionado_centavos: base.descontoIncondicionadoCentavos,
       ajuste_base_centavos: base.ajusteBaseCentavos,
+      documentos_ajuste_base: dados.documentosAjusteBase,
       ajuste_base_tipo: base.tipoAjusteBase,
       issqn_centavos: base.issqnCentavos,
       pis_centavos: base.pisCentavos,

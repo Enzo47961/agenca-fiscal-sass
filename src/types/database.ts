@@ -531,6 +531,7 @@ export type Database = {
           created_at: string
           desconto_incondicionado_centavos: number
           descricao_servico: string
+          documentos_ajuste_base: Json
           emitida_em: string | null
           empresa_id: string
           excedente: boolean
@@ -588,6 +589,7 @@ export type Database = {
           created_at?: string
           desconto_incondicionado_centavos?: number
           descricao_servico: string
+          documentos_ajuste_base?: Json
           emitida_em?: string | null
           empresa_id: string
           excedente?: boolean
@@ -645,6 +647,7 @@ export type Database = {
           created_at?: string
           desconto_incondicionado_centavos?: number
           descricao_servico?: string
+          documentos_ajuste_base?: Json
           emitida_em?: string | null
           empresa_id?: string
           excedente?: boolean
@@ -940,6 +943,7 @@ export type Database = {
           created_at: string
           desconto_incondicionado_centavos: number
           descricao_servico: string
+          documentos_ajuste_base: Json
           emitida_em: string | null
           empresa_id: string
           excedente: boolean

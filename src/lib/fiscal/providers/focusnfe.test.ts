@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { type DocumentoAjusteBase } from "@/lib/fiscal/ajuste-base";
 import {
   FocusNfeProvider,
   aliquotaIssParaPercentual,
@@ -725,5 +726,83 @@ describe("tributacao regular e ajuste de base no payload", () => {
     const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
     const chaves = Object.keys(servico).filter((k) => /ajuste/i.test(k));
     expect(chaves).toEqual([]);
+  });
+});
+
+describe("documentos_referenciados (gReeRepRes) no payload", () => {
+  const comDocs = (docs: DocumentoAjusteBase[]) => ({
+    ...ENTRADA,
+    servico: {
+      ...ENTRADA.servico,
+      reforma: { ...ENTRADA.servico.reforma, documentosAjuste: docs },
+    },
+  });
+
+  const DFE = {
+    tipo: "01" as const,
+    valorCentavos: 30_000,
+    identificacao: {
+      forma: "dfe_nacional" as const,
+      tipoChaveDFe: "2" as const,
+      chaveDFe: "35260812345678000199550010000000011000000017",
+    },
+  };
+
+  it("traduz cada documento nos campos da Focus", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(comDocs([DFE]));
+
+    const corpo = chamadas[0]!.corpo as Record<string, Record<string, unknown>>;
+    const docs = corpo.servico!.documentos_referenciados as Array<Record<string, unknown>>;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]!.tipo_valor_incluido).toBe("01");
+    expect(docs[0]!.valor_repasse).toBe("300.00");
+    expect(docs[0]!.tipo_chave_dfe).toBe("2");
+    expect(docs[0]!.chave_dfe).toBe(DFE.identificacao.chaveDFe);
+  });
+
+  it("cada forma de identificacao usa os campos dela", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(
+      comDocs([
+        {
+          ...DFE,
+          identificacao: {
+            forma: "doc_fiscal_outro",
+            codigoMunicipio: "3550308",
+            numero: "12345",
+            descricao: "Nota do subcontratado",
+          },
+        },
+        {
+          ...DFE,
+          identificacao: { forma: "doc_nao_fiscal", numero: "REC-9", descricao: "Recibo" },
+        },
+      ]),
+    );
+
+    const corpo = chamadas[0]!.corpo as Record<string, Record<string, unknown>>;
+    const docs = corpo.servico!.documentos_referenciados as Array<Record<string, unknown>>;
+    expect(docs[0]!.codigo_municipio_documento_fiscal_outro).toBe("3550308");
+    expect(docs[0]!.numero_documento_fiscal_outro).toBe("12345");
+    expect(docs[0]!.chave_dfe).toBeUndefined();
+    expect(docs[1]!.numero_documento_nao_fiscal_outro).toBe("REC-9");
+  });
+
+  it("o TOTAL do ajuste nunca vai no payload — quem soma e o Fisco", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(comDocs([DFE]));
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    const suspeitos = Object.keys(servico).filter((k) => /ajuste|vcalc/i.test(k));
+    expect(suspeitos).toEqual([]);
+  });
+
+  it("sem documentos, a colecao nao aparece", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
+    await provider.emitir(ENTRADA);
+
+    const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
+    expect(servico.documentos_referenciados).toBeUndefined();
   });
 });
