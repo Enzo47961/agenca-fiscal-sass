@@ -513,7 +513,6 @@ export class FocusNfeProvider implements FiscalProvider {
         ibs_cbs_situacao_tributaria_regular: declaracao?.tribRegular?.cstRegular ?? undefined,
         ibs_cbs_classificacao_tributaria_regular:
           declaracao?.tribRegular?.cClassTribRegular ?? undefined,
-        ...ajusteDeBase(base),
         // Componentes da base (NT-009). `undefined` quando zero: mandar 0,00
         // num campo opcional é ruído, e a ausência já significa "não há".
         desconto_incondicionado: base?.descontoIncondicionadoCentavos
@@ -531,35 +530,36 @@ export class FocusNfeProvider implements FiscalProvider {
 }
 
 /**
- * Nome do campo do ajuste de base na API da Focus. **Ainda desconhecido.**
+ * AJUSTE DE BASE — por que não existe campo para preencher.
  *
- * O valor já está calculado e disponível (`baseCalculo.ajusteBaseCentavos`,
- * com `tipoAjusteBase` dizendo se é `vCalcAjusteBCIBSCBS` ou
- * `vCalcAjusteBCLocImoveis`). O que falta é só a CHAVE: nenhuma das variações
- * aparece na referência de campos da Focus para NFS-e nacional, e o usuário
- * abrirá um ticket no suporte deles para obtê-la.
+ * A suposição anterior (e o andaime que ela gerou) era de que faltava apenas o
+ * NOME de um campo escalar. A referência de campos da Focus, lida por inteiro —
+ * 247 campos — mostra que **não há campo escalar nenhum**. O que existe é:
  *
- * Quando a resposta chegar, preencha as duas entradas abaixo e nada mais
- * precisa mudar — `ajusteDeBase()` já monta o par e os testes já cobrem os dois
- * estados. Deixar `null` mantém o campo fora do payload, que é o comportamento
- * correto enquanto o nome for desconhecido: inventar chave faria a nota sair
- * com o valor num lugar que o Fisco não lê, e o erro só apareceria na apuração.
+ *   `documentos_referenciados`  grupo/lista, "documentos referenciados nos
+ *                               casos de reembolso, repasse e ressarcimento
+ *                               que serão considerados na base de cálculo"
+ *     ├ tipoChaveDFe / chaveDFe        documento no repositório nacional
+ *     ├ cMunDocFiscal / nDocFiscal     documento fora do repositório
+ *     ├ tpReeRepRes / xTpReeRepRes     tipo do reembolso/repasse
+ *     └ vlrReeRepRes                   valor daquele documento
+ *
+ *   `imovel`                    grupo próprio, para locação de bem imóvel.
+ *
+ * Isso fecha com o Anexo VI: `vCalcAjusteBCIBSCBS` e `vCalcAjusteBCLocImoveis`
+ * ficam em `NFSe/infNFSe/IBSCBS/valores/` — lado NFS-e, e o prefixo `vCalc` diz
+ * o resto. O ajuste é CALCULADO pelo Ambiente de Dados Nacional somando os
+ * documentos que a DPS referencia. Mesmo padrão do vBC.
+ *
+ * CONSEQUÊNCIA PARA NÓS: o nosso `ajusteBaseCentavos` é um escalar e não tem
+ * como virar essa lista. Enviar o total num campo inventado não é opção, e
+ * omitir em silêncio é pior — o ADN calcularia a base SEM o ajuste, a nota
+ * sairia com base maior que a nossa prévia, e ninguém perceberia até a
+ * apuração. Por isso `solicitarEmissao` RECUSA nota com ajuste declarado,
+ * enquanto `gReeRepRes`/`imovel` não estiverem modelados como grupo.
+ *
+ * O que falta é modelagem, não informação: a documentação está completa.
  */
-const CAMPO_AJUSTE_BASE: Readonly<Record<"ibscbs" | "loc_imoveis", string | null>> = {
-  ibscbs: null, // ← vCalcAjusteBCIBSCBS
-  loc_imoveis: null, // ← vCalcAjusteBCLocImoveis
-};
-
-/**
- * Monta o ajuste de base quando há valor E o nome do campo é conhecido.
- * Devolve `{}` — que se espalha em nada — nos demais casos.
- */
-function ajusteDeBase(base: EmitirNfseInput["servico"]["reforma"]["baseCalculo"]): Record<string, string> {
-  if (!base?.ajusteBaseCentavos || !base.tipoAjusteBase) return {};
-  const campo = CAMPO_AJUSTE_BASE[base.tipoAjusteBase];
-  if (!campo) return {};
-  return { [campo]: centavosParaReais(base.ajusteBaseCentavos) };
-}
 
 /** Fábrica usada pelo registry — lê o ambiente validado em src/lib/env.ts. */
 export function criarFocusNfeProvider(cfg: {

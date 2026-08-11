@@ -504,10 +504,16 @@ export const PENDENCIAS_C5 = [
     "cCredPres, desconto incondicionado, PIS, COFINS, opSimpNac e regApTribSN. " +
     "O CST tem campo próprio (`ibs_cbs_situacao_tributaria`) — a suposição " +
     "anterior de que a Focus não o expunha estava errada.",
-  "O ajuste de base (vCalcAjusteBCIBSCBS / vCalcAjusteBCLocImoveis) não aparece " +
-    "na referência de campos da Focus. Segue sem ser enviado: quem trabalha com " +
-    "reembolso/repasse ou locação de imóvel terá o ajuste ignorado pelo Fisco " +
-    "até o nome do campo ser confirmado na homologação.",
+  // RESOLVIDA em 11/08/2026 pela leitura integral da referência da Focus (247
+  // campos). Não era falta de informação — era premissa errada da nossa parte.
+  "RESOLVIDA (com trabalho pendente) — o ajuste de base NÃO tem campo escalar. " +
+    "A DPS referencia DOCUMENTOS (`documentos_referenciados`: tipoChaveDFe, " +
+    "chaveDFe, tpReeRepRes, vlrReeRepRes por documento) e o Fisco soma, " +
+    "produzindo vCalcAjusteBCIBSCBS do lado NFS-e. Nosso `ajusteBaseCentavos` é " +
+    "um total e não vira essa lista, então nota com ajuste é RECUSADA: enviar o " +
+    "total num campo inventado erra o alvo, e omitir faria a nota sair com base " +
+    "maior que a prévia, em silêncio. Falta modelar gReeRepRes e imovel/ como " +
+    "grupos — é modelagem, não pesquisa.",
   "Códigos com exigeGrupoTributacaoRegular (550016 Reidi, 550022 Rehidro) são " +
     "RECUSADOS na criação da nota: o grupo gTribRegular é obrigatório para eles " +
     "(RN 733/734, E0964/E0965) e nenhuma fonte diz qual par CSTReg/cClassTribReg " +

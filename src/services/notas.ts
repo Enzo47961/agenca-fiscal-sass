@@ -184,6 +184,27 @@ export async function solicitarEmissao(
     );
   }
 
+  // AJUSTE DE BASE — recusa enquanto `gReeRepRes`/`imovel` não forem modelados.
+  //
+  // A DPS não tem campo escalar para o ajuste: ela referencia DOCUMENTOS
+  // (`documentos_referenciados`, com tipo e valor por documento) e o Ambiente
+  // de Dados Nacional soma, produzindo `vCalcAjusteBCIBSCBS`. Nosso modelo tem
+  // um total, que não vira essa lista.
+  //
+  // Aceitar mesmo assim seria o pior desfecho: o total sai da NOSSA base, não
+  // é transmitido, o ADN calcula a base sem ele, e a nota é autorizada com base
+  // MAIOR que a prévia que mostramos. Divergência silenciosa, descoberta na
+  // apuração. Recusar devolve o problema a quem pode resolvê-lo.
+  if (dados.ajusteBaseCentavos > 0) {
+    throw new Error(
+      "Ajuste de base (reembolso, repasse, ressarcimento ou locação de imóvel) ainda não " +
+        "pode ser transmitido: a nota fiscal exige os DOCUMENTOS que originam o ajuste, " +
+        "um a um, e não o valor total. Enviar só o total faria a nota sair com base maior " +
+        "que a calculada aqui, sem aviso. Emita sem o ajuste ou aguarde o suporte a " +
+        "documentos referenciados.",
+    );
+  }
+
   // O inverso também é erro: informar o grupo onde a tabela diz que ele não
   // cabe é rejeição E0964, e o dado sairia na nota sem ter onde encaixar.
   if (declaracao?.tribRegular && atributos && !atributos.exigeTribRegular) {

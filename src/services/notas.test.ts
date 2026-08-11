@@ -191,19 +191,18 @@ describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
       ...base,
       valorServicoCentavos: 100_000, // R$ 1.000,00
       descontoIncondicionadoCentavos: 10_000,
-      ajusteBaseCentavos: 5_000,
-      tipoAjusteBase: "ibscbs",
       issqnCentavos: 4_500,
       pisCentavos: 1_650,
       cofinsCentavos: 7_600,
     });
 
     const p = payload();
-    // 100000 − 10000 − 5000 − 4500 − 1650 − 7600
-    expect(p.ibscbs_base_centavos).toBe(71_250);
+    // 100000 − 10000 − 4500 − 1650 − 7600. O ajuste de base ficou de fora:
+    // a DPS pede os documentos que o originam, e o serviço recusa o total.
+    expect(p.ibscbs_base_centavos).toBe(76_250);
     expect(p.desconto_incondicionado_centavos).toBe(10_000);
-    expect(p.ajuste_base_centavos).toBe(5_000);
-    expect(p.ajuste_base_tipo).toBe("ibscbs");
+    expect(p.ajuste_base_centavos).toBe(0);
+    expect(p.ajuste_base_tipo).toBeNull();
     expect(p.issqn_centavos).toBe(4_500);
     expect(p.pis_centavos).toBe(1_650);
     expect(p.cofins_centavos).toBe(7_600);
@@ -282,12 +281,19 @@ describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
     ).rejects.toThrow(/negativa/i);
   });
 
-  it("recusa ajuste de base sem tipo — não teria tag onde sair", async () => {
+  // A regra "ajuste sem tipo não tem tag onde sair" continua valendo dentro de
+  // calcularBaseIbsCbs (ver base-calculo.test.ts). No serviço ela virou
+  // inalcançável: a recusa do ajuste inteiro acontece antes, porque a DPS não
+  // aceita o total — pede os documentos que o originam.
+  it("recusa QUALQUER ajuste de base, com tipo ou sem", async () => {
     const { db } = dbCapturandoInsert();
 
     await expect(
       solicitarEmissao(db, { ...base, ajusteBaseCentavos: 1_000 }),
-    ).rejects.toThrow(/tipoAjusteBase/);
+    ).rejects.toThrow(/documentos/i);
+    await expect(
+      solicitarEmissao(db, { ...base, ajusteBaseCentavos: 1_000, tipoAjusteBase: "ibscbs" }),
+    ).rejects.toThrow(/documentos/i);
   });
 
   it("recusa PIS/COFINS a partir de 2027 antes de criar a nota", async () => {
@@ -598,5 +604,29 @@ describe("solicitarEmissao — tributacao regular informada a mao", () => {
         declaracaoIbsCbs: { cst: "550", cClassTrib: "550016" },
       }),
     ).rejects.toThrow(/contador/i);
+  });
+});
+
+describe("solicitarEmissao — ajuste de base recusado ate gReeRepRes existir", () => {
+  beforeEach(() => limparCacheDominioFiscal());
+
+  it("recusa nota com ajuste de base declarado", async () => {
+    // Aceitar produziria o pior desfecho: o total sai da NOSSA base, nao e
+    // transmitido, e a nota e autorizada com base MAIOR que a previa.
+    const { db } = dbFiscal({ correlacao: [], reducao: null });
+
+    await expect(
+      solicitarEmissao(db, {
+        ...base,
+        ajusteBaseCentavos: 30_000,
+        tipoAjusteBase: "ibscbs",
+      }),
+    ).rejects.toThrow(/documentos/i);
+  });
+
+  it("nota sem ajuste segue normalmente", async () => {
+    const { db, payload } = dbFiscal({ correlacao: [OPCAO_INTEGRAL], reducao: { perc_reducao_ibs: 0, perc_reducao_cbs: 0 } });
+    await solicitarEmissao(db, base);
+    expect(payload().ajuste_base_centavos).toBe(0);
   });
 });

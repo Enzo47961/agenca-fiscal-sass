@@ -701,10 +701,11 @@ describe("tributacao regular e ajuste de base no payload", () => {
     expect(servico.ibs_cbs_situacao_tributaria_regular).toBeUndefined();
   });
 
-  it("ajuste de base fica FORA enquanto o nome do campo da Focus for desconhecido", async () => {
-    // O valor existe e esta calculado; falta so a chave. Inventar nome faria a
-    // nota sair com o valor onde o Fisco nao le, e o erro so apareceria na
-    // apuracao. Quando a chave chegar, este teste passa a valer ao contrario.
+  it("ajuste de base nao vai no payload — a DPS pede documentos, nao um total", async () => {
+    // Nao e "falta a chave": a referencia da Focus (247 campos) mostra que o
+    // ajuste vem de `documentos_referenciados` e o Fisco e quem soma. Um total
+    // nao tem onde entrar, e inventar campo faria a nota sair com o valor onde
+    // o ADN nao le.
     const { provider, chamadas } = criarProvider([{ status: 200, corpo: AUTORIZADA }]);
     await provider.emitir(
       comReforma({

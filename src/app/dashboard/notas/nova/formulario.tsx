@@ -5,7 +5,10 @@ import Link from "next/link";
 import { CheckCircle2, HelpCircle, Loader2, SendHorizonal } from "lucide-react";
 import { consultarCorrelacaoAction, emitirNotaAction, type EmissaoResult } from "./actions";
 import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
-import { REGIME_IBSCBS_LABEL, TIPO_AJUSTE_BASE_LABEL } from "@/lib/fiscal/reforma";
+// TIPO_AJUSTE_BASE_LABEL saiu junto com o seletor de ajuste: a DPS não aceita
+// o total, e o rótulo dos dois tipos só voltará quando `gReeRepRes` e `imovel/`
+// forem modelados como grupos de documentos.
+import { REGIME_IBSCBS_LABEL } from "@/lib/fiscal/reforma";
 import { REGIMES_NBS_SOB_DUVIDA } from "@/lib/fiscal/regimes";
 
 const inputClasses =
@@ -455,23 +458,29 @@ export function FormularioEmissao({
               </Ajuda>
             </label>
 
-            <label className="block">
-              <span className="mb-1 block text-sm text-slate-600">Ajuste de base (R$)</span>
-              <input name="ajusteBase" inputMode="decimal" placeholder="0,00" className={inputClasses} />
-            </label>
+            {/*
+              Ajuste de base: campos desabilitados de propósito.
 
-            <label className="block">
-              <span className="mb-1 block text-sm text-slate-600">Tipo do ajuste</span>
-              <select name="tipoAjusteBase" defaultValue="" className={inputClasses}>
-                <option value="">Nenhum</option>
-                {Object.entries(TIPO_AJUSTE_BASE_LABEL).map(([valor, rotulo]) => (
-                  <option key={valor} value={valor}>
-                    {rotulo}
-                  </option>
-                ))}
-              </select>
-              <Ajuda>Obrigatório quando há ajuste: cada tipo sai numa tag diferente da nota.</Ajuda>
-            </label>
+              A DPS não aceita o total — ela referencia os DOCUMENTOS que
+              originam o reembolso/repasse (um a um, com tipo e valor) e o Fisco
+              soma. Nosso modelo tem só o total, então a nota seria autorizada
+              com base maior que a prévia, em silêncio. O serviço recusa; aqui a
+              tela evita que alguém digite para descobrir isso depois.
+            */}
+            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-100/70 px-3 py-2.5">
+              <p className="text-sm text-slate-600">
+                Ajuste de base <span className="text-slate-400">(indisponível)</span>
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Reembolso, repasse, ressarcimento e locação de imóvel exigem que cada documento
+                de origem seja referenciado na nota — a nota fiscal não aceita apenas o valor
+                total. Enquanto isso não está implementado, emitir com ajuste faria a nota sair
+                com base maior que a calculada aqui, sem aviso. Emita sem o ajuste ou fale
+                conosco.
+              </p>
+              <input type="hidden" name="ajusteBase" value="" />
+              <input type="hidden" name="tipoAjusteBase" value="" />
+            </div>
 
             <label className="block">
               <span className="mb-1 block text-sm text-slate-600">PIS (R$)</span>
