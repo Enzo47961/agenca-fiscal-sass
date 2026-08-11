@@ -1,7 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
+import { COOKIE_EMPRESA_ATIVA, createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { criarEmpresaComOwner, dadosFiscaisSchema } from "@/services/empresas";
 
 export interface OnboardingResult {
@@ -21,9 +22,9 @@ export async function criarEmpresaAction(formData: FormData): Promise<Onboarding
   if (estado.tipo === "deslogado") {
     redirect("/login");
   }
-  if (estado.tipo === "com_empresa") {
-    redirect("/dashboard"); // já tem empresa — nada a fazer aqui
-  }
+  // Quem já tem empresa PODE criar outra: é o contador acrescentando um cliente
+  // à carteira. O que impede abuso continua no banco — CNPJ único e teto por
+  // usuário em `criar_minha_empresa()` —, não neste redirect.
 
   const parse = dadosFiscaisSchema.safeParse({
     razaoSocial: formData.get("razaoSocial"),
@@ -38,11 +39,23 @@ export async function criarEmpresaAction(formData: FormData): Promise<Onboarding
     return { ok: false, erro: parse.error.errors[0]?.message ?? "Dados inválidos." };
   }
 
+  let empresaId: string;
   try {
-    await criarEmpresaComOwner(db, parse.data);
+    ({ empresaId } = await criarEmpresaComOwner(db, parse.data));
   } catch (e) {
     return { ok: false, erro: e instanceof Error ? e.message : "Erro ao criar a empresa." };
   }
+
+  // A empresa recém-criada vira a ativa. Sem isto, quem acabou de cadastrar
+  // cairia no painel de OUTRA empresa da carteira e concluiria que o cadastro
+  // falhou — ou pior, começaria a emitir no CNPJ errado.
+  cookies().set(COOKIE_EMPRESA_ATIVA, empresaId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365,
+  });
 
   redirect("/dashboard");
 }

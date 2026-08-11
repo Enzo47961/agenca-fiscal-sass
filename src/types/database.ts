@@ -919,6 +919,16 @@ export type Database = {
       }
       empresas_do_usuario: { Args: never; Returns: string[] }
       marcar_nota_excedente: { Args: { p_nota_id: string }; Returns: boolean }
+      minhas_empresas: {
+        Args: never
+        Returns: {
+          cnpj: string
+          empresa_id: string
+          nome_fantasia: string
+          papel: Database["public"]["Enums"]["membro_papel"]
+          razao_social: string
+        }[]
+      }
       transicionar_status_nota: {
         Args: {
           p_erro_codigo?: string

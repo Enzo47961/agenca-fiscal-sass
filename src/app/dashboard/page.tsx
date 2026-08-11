@@ -18,6 +18,8 @@ import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { statusDasNotas, resumoBilling } from "@/services/dashboard";
 import { formatarCentavos, type NotaStatus } from "@/types/domain";
 import { publicEnv } from "@/lib/env";
+import { listarMinhasEmpresas } from "./empresas/actions";
+import { EmpresaAtiva, SeletorEmpresa } from "./empresas/seletor";
 
 export const dynamic = "force-dynamic"; // status de notas muda a cada retry
 
@@ -37,10 +39,12 @@ export default async function DashboardPage() {
   if (estado.tipo === "deslogado") redirect("/login");
   if (estado.tipo === "sem_empresa") redirect("/onboarding"); // 1º acesso: completar cadastro
 
-  const [notas, billing] = await Promise.all([
+  const [notas, billing, carteira] = await Promise.all([
     statusDasNotas(db, { empresaId: estado.empresaId }),
     resumoBilling(db, { empresaId: estado.empresaId }),
+    listarMinhasEmpresas(),
   ]);
+  const empresaAtiva = carteira.find((e) => e.empresaId === estado.empresaId) ?? null;
 
   const whatsapp = publicEnv().NEXT_PUBLIC_WHATSAPP_SUPORTE;
   const linkWhatsApp = `https://wa.me/${whatsapp}?text=${encodeURIComponent(
@@ -51,12 +55,21 @@ export default async function DashboardPage() {
     <main className="mx-auto max-w-6xl px-6 py-8">
       {/* Cabeçalho */}
       <header className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold">Painel de Faturamento</h1>
+          {/*
+            A empresa ativa fica ao lado do título, não escondida num menu:
+            emitir nota no CNPJ errado é engano que ninguém desfaz, e a âncora
+            precisa estar onde o olho já está.
+          */}
+          {empresaAtiva ? <EmpresaAtiva empresa={empresaAtiva} /> : null}
           <p className="text-sm text-slate-500">
             Emissão de NFS-e com reprocessamento automático
           </p>
         </div>
+        {estado.totalEmpresas > 1 ? (
+          <SeletorEmpresa empresas={carteira} empresaAtivaId={estado.empresaId} />
+        ) : null}
         <nav aria-label="Ações do painel" className="flex flex-nowrap items-center gap-2 overflow-x-auto">
           <Link
             href="/dashboard/clientes"

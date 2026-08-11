@@ -9,12 +9,21 @@ export const metadata = {
   title: "Complete seu cadastro — Agência Fiscal",
 };
 
-export default async function OnboardingPage() {
+export default async function OnboardingPage({
+  searchParams,
+}: {
+  searchParams: { nova?: string };
+}) {
   const db = createSessionClient();
   const estado = await estadoDaSessao(db);
 
+  // `?nova=1` é o caminho de quem JÁ tem empresa e está acrescentando outra à
+  // carteira — o contador cadastrando mais um cliente. Sem esse recorte, quem
+  // tem empresa seria sempre devolvido ao painel e a segunda nunca existiria.
+  const adicionando = searchParams.nova === "1";
+
   if (estado.tipo === "deslogado") redirect("/login");
-  if (estado.tipo === "com_empresa") redirect("/dashboard");
+  if (estado.tipo === "com_empresa" && !adicionando) redirect("/dashboard");
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -30,14 +39,17 @@ export default async function OnboardingPage() {
         <div className="mx-auto mb-3 inline-flex rounded-xl bg-brand-50 p-3">
           <Building2 className="h-7 w-7 text-brand-600" aria-hidden />
         </div>
-        <h1 className="text-2xl font-semibold">Falta só um passo!</h1>
+        <h1 className="text-2xl font-semibold">
+          {adicionando ? "Adicionar empresa" : "Falta só um passo!"}
+        </h1>
         <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
-          Sua conta foi criada. Agora cadastre os dados da sua empresa — são eles que saem
-          impressos nas suas notas fiscais. Leva menos de 2 minutos.
+          {adicionando
+            ? "Cadastre os dados da empresa que você vai gerenciar. Ela entra na sua carteira e você alterna entre elas pelo seletor do painel."
+            : "Sua conta foi criada. Agora cadastre os dados da sua empresa — são eles que saem impressos nas suas notas fiscais. Leva menos de 2 minutos."}
         </p>
       </div>
 
-      <FormularioOnboarding emailSugerido={estado.email ?? ""} />
+      <FormularioOnboarding emailSugerido={estado.tipo === "sem_empresa" ? estado.email ?? "" : ""} />
     </main>
   );
 }
