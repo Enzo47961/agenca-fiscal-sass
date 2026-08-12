@@ -146,6 +146,7 @@ interface DadosIniciais {
   regimeApuracaoSN: string | null;
   dataOpcaoRegimeRegular: string | null;
   regimeApuracaoConfirmadoEm: string | null;
+  certificadoValidoAte: string | null;
   providerFiscal: string;
 }
 
@@ -229,6 +230,13 @@ export function FormularioConfiguracoes({
   );
   const precisaDecidirApuracao =
     aceitaRegimeApuracao && !dadosIniciais.regimeApuracaoConfirmadoEm;
+
+  // 45 dias: prazo confortável para emitir um A1 novo sem correria.
+  const venceEmBreve = (() => {
+    const ate = dadosIniciais.certificadoValidoAte;
+    if (!ate) return false;
+    return (Date.parse(ate + "T23:59:59Z") - Date.now()) / 86_400_000 < 45;
+  })();
 
   /**
    * A situação no Simples não é um campo à parte na tela: ela é a mesma
@@ -565,6 +573,30 @@ export function FormularioConfiguracoes({
           automática.
         </Ajuda>
 
+        {/*
+          Dizer onde o certificado fica não é detalhe técnico: é o contador
+          entregando o certificado de um CLIENTE dele. Ele precisa saber quem
+          passa a guardar antes de clicar, não depois.
+        */}
+        <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+          <strong className="text-slate-700">Onde o certificado fica:</strong> ele é enviado
+          diretamente ao provedor fiscal responsável pela emissão, que já precisa dele para
+          assinar as notas. <strong>Nós não guardamos cópia</strong> do arquivo nem da senha —
+          registramos apenas a data de validade, para avisar antes do vencimento.
+        </p>
+
+        {dadosIniciais.certificadoValidoAte ? (
+          <p className={`mt-3 rounded-lg border px-3 py-2.5 text-sm ${
+            venceEmBreve
+              ? "border-amber-300 bg-amber-50 text-amber-900"
+              : "border-green-200 bg-green-50 text-green-900"
+          }`}>
+            Certificado ativo, válido até{" "}
+            <strong>{new Date(dadosIniciais.certificadoValidoAte + "T12:00:00").toLocaleDateString("pt-BR")}</strong>
+            {venceEmBreve ? " — renove antes do vencimento para não interromper a emissão." : "."}
+          </p>
+        ) : null}
+
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -621,8 +653,8 @@ export function FormularioConfiguracoes({
           <span className="mb-1 block text-sm text-slate-600">Senha do certificado *</span>
           <input name="senhaCertificado" type="password" required autoComplete="off" className={inputClasses} />
           <Ajuda>
-            A senha definida quando o certificado foi emitido. Ela é criptografada junto com o
-            arquivo — nunca armazenamos em texto puro.
+            A senha definida quando o certificado foi emitido. Ela vai junto com o arquivo para o
+            provedor fiscal e não é gravada aqui em momento nenhum.
           </Ajuda>
         </label>
 
@@ -633,7 +665,7 @@ export function FormularioConfiguracoes({
             className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
           >
             {salvandoCert ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <UploadCloud className="h-4 w-4" aria-hidden />}
-            Enviar certificado criptografado
+            Enviar certificado
           </button>
           <Feedback resultado={resultadoCert} />
         </div>

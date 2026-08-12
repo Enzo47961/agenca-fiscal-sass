@@ -326,6 +326,10 @@ export type Database = {
       }
       empresas: {
         Row: {
+          certificado_cnpj: string | null
+          certificado_enviado_em: string | null
+          certificado_valido_ate: string | null
+          certificado_valido_de: string | null
           cnae: string | null
           cnpj: string
           codigo_municipio_ibge: string
@@ -335,6 +339,7 @@ export type Database = {
           id: string
           inscricao_municipal: string | null
           nome_fantasia: string | null
+          provider_empresa_id: string | null
           provider_fiscal: string
           razao_social: string
           regime_apuracao_confirmado_em: string | null
@@ -346,6 +351,10 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          certificado_cnpj?: string | null
+          certificado_enviado_em?: string | null
+          certificado_valido_ate?: string | null
+          certificado_valido_de?: string | null
           cnae?: string | null
           cnpj: string
           codigo_municipio_ibge: string
@@ -355,6 +364,7 @@ export type Database = {
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
+          provider_empresa_id?: string | null
           provider_fiscal?: string
           razao_social: string
           regime_apuracao_confirmado_em?: string | null
@@ -366,6 +376,10 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          certificado_cnpj?: string | null
+          certificado_enviado_em?: string | null
+          certificado_valido_ate?: string | null
+          certificado_valido_de?: string | null
           cnae?: string | null
           cnpj?: string
           codigo_municipio_ibge?: string
@@ -375,6 +389,7 @@ export type Database = {
           id?: string
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
+          provider_empresa_id?: string | null
           provider_fiscal?: string
           razao_social?: string
           regime_apuracao_confirmado_em?: string | null

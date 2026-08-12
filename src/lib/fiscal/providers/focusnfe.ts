@@ -102,6 +102,22 @@ const nfseFocusSchema = z.object({
 
 type NfseFocus = z.infer<typeof nfseFocusSchema>;
 
+/**
+ * Resposta do recurso `/v2/empresas`. `passthrough` porque a Focus devolve
+ * dezenas de campos de cadastro e só nos interessam estes — recusar o corpo
+ * inteiro por causa de um campo novo seria pior que ignorá-lo.
+ */
+const empresaFocusSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).nullish(),
+    certificado_valido_de: z.string().nullish(),
+    certificado_valido_ate: z.string().nullish(),
+    certificado_cnpj: z.string().nullish(),
+    mensagem: z.string().nullish(),
+    erro: z.string().nullish(),
+  })
+  .passthrough();
+
 /** Status terminais/possíveis documentados pela Focus NFe. */
 const STATUS_AUTORIZADO = "autorizado";
 const STATUS_PROCESSANDO = "processando_autorizacao";
@@ -249,6 +265,77 @@ export class FocusNfeProvider implements FiscalProvider {
     return this.interpretar(resp.corpo, referenciaExterna);
   }
 
+  /**
+   * Cadastra ou atualiza a empresa na Focus, enviando o certificado A1.
+   *
+   * `POST /v2/empresas` cria; `PUT /v2/empresas/{id}` atualiza e TROCA o
+   * certificado — confirmado na referência de campos deles em 12/08/2026. O
+   * retorno traz `certificado_valido_ate`, que é o que permite avisar o
+   * usuário antes do vencimento em vez de descobrir na nota rejeitada.
+   *
+   * O CERTIFICADO NÃO É LOGADO NEM DEVOLVIDO. A mensagem de erro carrega o
+   * corpo da resposta da Focus, nunca o do envio: `arquivo_certificado_base64`
+   * num log de erro seria exatamente o vazamento que este desenho evita.
+   */
+  async enviarCertificado(params: {
+    empresa: {
+      cnpj: string;
+      razaoSocial: string;
+      inscricaoMunicipal: string | null;
+      codigoMunicipioIbge: string;
+      emailContato: string;
+      regimeTributario: string;
+    };
+    certificado: { arquivo: Buffer; senha: string };
+    providerEmpresaId?: string | null;
+  }): Promise<{
+    providerEmpresaId: string;
+    validoAte: string | null;
+    validoDe: string | null;
+    cnpjDoCertificado: string | null;
+  }> {
+    const { empresa, certificado, providerEmpresaId } = params;
+    const atualizando = Boolean(providerEmpresaId);
+
+    const resp = await this.requisitarEmpresa(
+      atualizando ? "PUT" : "POST",
+      atualizando ? `/v2/empresas/${providerEmpresaId}` : "/v2/empresas",
+      {
+        nome: empresa.razaoSocial,
+        cnpj: empresa.cnpj,
+        inscricao_municipal: empresa.inscricaoMunicipal ?? undefined,
+        codigo_municipio: empresa.codigoMunicipioIbge,
+        email: empresa.emailContato,
+        regime_tributario: empresa.regimeTributario,
+        arquivo_certificado_base64: certificado.arquivo.toString("base64"),
+        senha_certificado: certificado.senha,
+      },
+    );
+
+    if (resp.statusHttp >= 400) {
+      const msg = resp.corpo.mensagem ?? resp.corpo.erro ?? "erro não detalhado";
+      // Senha errada, certificado vencido e CNPJ divergente sao PERMANENTES:
+      // repetir com o mesmo arquivo da o mesmo resultado.
+      throw ehTransiente(resp.statusHttp)
+        ? new FiscalErrorTransient(`Focus recusou o certificado: ${msg}`, String(resp.statusHttp))
+        : new FiscalErrorPermanent(`Focus recusou o certificado: ${msg}`, String(resp.statusHttp));
+    }
+
+    if (!resp.corpo.id) {
+      throw new FiscalErrorPermanent(
+        "Focus aceitou o envio mas não devolveu o id da empresa — sem ele não dá " +
+          "para trocar o certificado depois.",
+      );
+    }
+
+    return {
+      providerEmpresaId: String(resp.corpo.id),
+      validoAte: resp.corpo.certificado_valido_ate ?? null,
+      validoDe: resp.corpo.certificado_valido_de ?? null,
+      cnpjDoCertificado: resp.corpo.certificado_cnpj ?? null,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Internos
   // -------------------------------------------------------------------------
@@ -381,6 +468,57 @@ export class FocusNfeProvider implements FiscalProvider {
         `Resposta da Focus NFe fora do formato esperado (HTTP ${resposta.status})`,
         "contrato_invalido",
         bruto,
+      );
+    }
+
+    return { statusHttp: resposta.status, corpo: parse.data };
+  }
+
+  /**
+   * Irmã de `requisitar()` para o recurso `/v2/empresas`, que tem contrato de
+   * resposta próprio.
+   *
+   * Separada de propósito, e não generalizada com um tipo genérico: o payload
+   * que passa por aqui carrega o certificado, e a única regra que não pode ser
+   * quebrada nesta função é NÃO INCLUIR O CORPO ENVIADO em nenhuma mensagem de
+   * erro. Uma função compartilhada com `requisitar()` — que hoje devolve o
+   * `bruto` no erro de contrato — herdaria esse comportamento por acidente.
+   */
+  private async requisitarEmpresa(
+    metodo: "POST" | "PUT",
+    caminho: string,
+    corpo: Record<string, unknown>,
+  ): Promise<{ statusHttp: number; corpo: z.infer<typeof empresaFocusSchema> }> {
+    let resposta: Response;
+    try {
+      resposta = await this.fetchImpl(`${this.base}${caminho}`, {
+        method: metodo,
+        headers: {
+          Authorization: this.autorizacao,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(corpo),
+        signal: AbortSignal.timeout(this.timeoutMs),
+        cache: "no-store",
+      });
+    } catch (e) {
+      throw new FiscalErrorTransient(
+        `Falha de rede ao chamar a Focus NFe (${metodo} ${caminho}): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        "rede",
+        // `null` e não o corpo: ele contém o certificado.
+        null,
+      );
+    }
+
+    const bruto: unknown = await resposta.json().catch(() => ({}));
+    const parse = empresaFocusSchema.safeParse(bruto);
+    if (!parse.success) {
+      throw new FiscalErrorTransient(
+        `Resposta da Focus NFe fora do formato esperado (HTTP ${resposta.status})`,
+        "contrato_invalido",
+        null,
       );
     }
 

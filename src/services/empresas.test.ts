@@ -4,7 +4,7 @@ import {
   atualizarProviderFiscal,
   dadosFiscaisSchema,
   pareceArquivoPfx,
-  salvarCertificadoA1,
+  enviarCertificadoA1,
 } from "@/services/empresas";
 import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
 import { diasAtePrazoOpcao, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
@@ -276,49 +276,137 @@ describe("pareceArquivoPfx", () => {
   });
 });
 
-describe("salvarCertificadoA1", () => {
-  const CHAVE = Buffer.alloc(32, 7).toString("base64");
+describe("enviarCertificadoA1 — o certificado vai para o provider, nao para o banco", () => {
+  const EMPRESA_ROW = {
+    cnpj: "12345678000199",
+    razao_social: "Empresa Teste LTDA",
+    inscricao_municipal: null,
+    codigo_municipio_ibge: "3550308",
+    email_contato: "contato@exemplo.com.br",
+    regime_tributario: "simples_nacional",
+    provider_empresa_id: null,
+  };
 
-  function bancoComStorage() {
-    const uploads: string[] = [];
-    const db = fakeSupabase((): FakeResult => ({ data: null, error: null })) as never as Parameters<
-      typeof salvarCertificadoA1
-    >[0];
-    (db as unknown as { storage: unknown }).storage = {
-      from: () => ({
-        upload: (caminho: string) => {
-          uploads.push(caminho);
-          return Promise.resolve({ error: null });
-        },
-      }),
-    };
-    return { db, uploads };
+  /** Banco falso que devolve a empresa no select e captura o update. */
+  function banco(row: Record<string, unknown> = EMPRESA_ROW) {
+    const updates: Record<string, unknown>[] = [];
+    const db = fakeSupabase((ctx): FakeResult => {
+      if (ctx.op === "update") {
+        updates.push(ctx.payload as Record<string, unknown>);
+        return { data: null, error: null };
+      }
+      return { data: row, error: null };
+    });
+    return { db, updates };
   }
 
-  it("recusa arquivo que não é PFX e NÃO grava nada", async () => {
-    const { db, uploads } = bancoComStorage();
+  /** Provider falso que registra o que recebeu. */
+  function provider(resposta?: Partial<{ providerEmpresaId: string; validoAte: string | null; validoDe: string | null; cnpjDoCertificado: string | null }>) {
+    const recebidos: unknown[] = [];
+    return {
+      recebidos,
+      p: {
+        nome: "falso",
+        emitir: async () => {
+          throw new Error("nao usado");
+        },
+        consultarPorReferencia: async () => null,
+        enviarCertificado: async (params: unknown) => {
+          recebidos.push(params);
+          return {
+            providerEmpresaId: "focus-123",
+            validoAte: "2027-08-01",
+            validoDe: "2026-08-01",
+            cnpjDoCertificado: "12345678000199",
+            ...resposta,
+          };
+        },
+      } as unknown as Parameters<typeof enviarCertificadoA1>[1],
+    };
+  }
+
+  it("recusa arquivo que nao e PFX e NEM CHEGA no provider", async () => {
+    const { db } = banco();
+    const { p, recebidos } = provider();
+
     await expect(
-      salvarCertificadoA1(db, {
+      enviarCertificadoA1(db, p, {
         empresaId: EMPRESA,
         arquivoPfx: Buffer.from("-----BEGIN CERTIFICATE-----", "utf8"),
         senhaPfx: "senha",
-        chaveCriptografiaBase64: CHAVE,
       }),
-    ).rejects.toThrow(/não parece um certificado A1/);
+    ).rejects.toThrow(/nao parece um certificado A1|não parece um certificado A1/);
 
-    expect(uploads).toHaveLength(0);
+    expect(recebidos).toHaveLength(0);
   });
 
-  it("aceita PFX válido e grava no caminho do tenant", async () => {
-    const { db, uploads } = bancoComStorage();
-    await salvarCertificadoA1(db, {
+  it("envia ao provider e grava SO id e validade", async () => {
+    const { db, updates } = banco();
+    const { p } = provider();
+
+    const r = await enviarCertificadoA1(db, p, {
       empresaId: EMPRESA,
       arquivoPfx: pfxFalso(),
       senhaPfx: "senha",
-      chaveCriptografiaBase64: CHAVE,
     });
 
-    expect(uploads).toEqual([`${EMPRESA}/certificado-a1.enc`]);
+    expect(r.validoAte).toBe("2027-08-01");
+    const u = updates[0]!;
+    expect(u.provider_empresa_id).toBe("focus-123");
+    expect(u.certificado_valido_ate).toBe("2027-08-01");
+  });
+
+  it("O CERTIFICADO E A SENHA NUNCA VAO PARA O BANCO", async () => {
+    // Este e o teste que guarda a decisao inteira. Se alguem reintroduzir
+    // armazenamento, e aqui que quebra.
+    const { db, updates } = banco();
+    const { p } = provider();
+
+    await enviarCertificadoA1(db, p, {
+      empresaId: EMPRESA,
+      arquivoPfx: pfxFalso(),
+      senhaPfx: "senha-secreta",
+    });
+
+    const gravado = JSON.stringify(updates);
+    expect(gravado).not.toContain("senha-secreta");
+    expect(gravado.toLowerCase()).not.toContain("arquivo");
+    expect(gravado.toLowerCase()).not.toContain("pfx");
+  });
+
+  it("recusa certificado de OUTRO CNPJ", async () => {
+    // Assina, mas assina errado — e a rejeicao so apareceria na primeira nota.
+    const { db, updates } = banco();
+    const { p } = provider({ cnpjDoCertificado: "99999999000199" });
+
+    await expect(
+      enviarCertificadoA1(db, p, {
+        empresaId: EMPRESA,
+        arquivoPfx: pfxFalso(),
+        senhaPfx: "senha",
+      }),
+    ).rejects.toThrow(/99999999000199/);
+
+    expect(updates).toHaveLength(0);
+  });
+
+  it("recusa provider que nao guarda certificado, em vez de fingir que salvou", async () => {
+    const { db } = banco();
+    const semSuporte = {
+      nome: "mock",
+      emitir: async () => {
+        throw new Error("nao usado");
+      },
+      consultarPorReferencia: async () => null,
+    } as unknown as Parameters<typeof enviarCertificadoA1>[1];
+
+    await expect(
+      enviarCertificadoA1(db, semSuporte, {
+        empresaId: EMPRESA,
+        arquivoPfx: pfxFalso(),
+        senhaPfx: "senha",
+      }),
+    ).rejects.toThrow(/nao guarda certificado|não guarda certificado/);
   });
 });
 

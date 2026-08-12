@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "fiscal:sync": "node scripts/sync-tabelas-fiscais.mjs",
-    "fiscal:sync:apply": "node scripts/sync-tabelas-fiscais.mjs --apply"
+    "fiscal:sync:apply": "node scripts/sync-tabelas-fiscais.mjs --apply",
+    "certificados:remover-bucket": "node scripts/remover-bucket-certificados.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

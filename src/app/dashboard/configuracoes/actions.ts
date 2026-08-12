@@ -2,18 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 import { createSessionClient, empresaDaSessao } from "@/lib/supabase/server";
-import { serverEnv } from "@/lib/env";
 import {
   atualizarDadosFiscais,
   atualizarProviderFiscal,
   dadosFiscaisSchema,
-  salvarCertificadoA1,
+  enviarCertificadoA1,
 } from "@/services/empresas";
-import { nomesDeProvidersDisponiveis } from "@/lib/fiscal/providers";
+import { nomesDeProvidersDisponiveis, resolverProvider } from "@/lib/fiscal/providers";
 
 export interface ActionResult {
   ok: boolean;
   erro?: string;
+  /** Informação útil no sucesso — hoje, a validade do certificado enviado. */
+  aviso?: string;
 }
 
 /**
@@ -95,15 +96,30 @@ export async function uploadCertificadoAction(formData: FormData): Promise<Actio
   }
 
   try {
-    await salvarCertificadoA1(db, {
-      empresaId: sessao.empresaId,
-      arquivoPfx: Buffer.from(await arquivo.arrayBuffer()),
-      senhaPfx: senha,
-      chaveCriptografiaBase64: serverEnv().CERT_ENCRYPTION_KEY,
-    });
+    // O provider da empresa e quem vai GUARDAR o certificado — nos apenas
+    // repassamos. `resolverProvider` recebe as dependencias vazias porque o
+    // envio de certificado nao precisa da tabela de dominio fiscal.
+    const { data: empresa } = await db
+      .from("empresas")
+      .select("provider_fiscal")
+      .eq("id", sessao.empresaId)
+      .single();
+
+    const { validoAte } = await enviarCertificadoA1(
+      db,
+      resolverProvider(empresa?.provider_fiscal ?? "mock", {}),
+      {
+        empresaId: sessao.empresaId,
+        arquivoPfx: Buffer.from(await arquivo.arrayBuffer()),
+        senhaPfx: senha,
+      },
+    );
     revalidatePath("/dashboard/configuracoes");
-    return { ok: true };
+    return {
+      ok: true,
+      aviso: validoAte ? `Certificado válido até ${validoAte}.` : undefined,
+    };
   } catch (e) {
-    return { ok: false, erro: e instanceof Error ? e.message : "Erro no upload." };
+    return { ok: false, erro: e instanceof Error ? e.message : "Erro no envio." };
   }
 }

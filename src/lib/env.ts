@@ -24,12 +24,18 @@ const serverEnvSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   /** Remetente dos e-mails. Domínio precisa estar verificado no Resend. */
   EMAIL_REMETENTE: z.string().default("Agência Fiscal <onboarding@resend.dev>"),
-  /** Chave AES-256 (base64, 32 bytes) para criptografar certificados A1 em repouso. */
-  CERT_ENCRYPTION_KEY: z
-    .string()
-    .refine((v) => Buffer.from(v, "base64").length === 32, {
-      message: "CERT_ENCRYPTION_KEY deve ser 32 bytes em base64 (openssl rand -base64 32)",
-    }),
+  /**
+   * Sobra do tempo em que guardávamos o certificado A1 cifrado. Desde
+   * 12/08/2026 o certificado vai direto para o provider e não fica em repouso
+   * aqui — não há mais nada para cifrar.
+   *
+   * Vira OPCIONAL em vez de sumir: exigir uma chave que ninguém usa quebraria
+   * o boot de todo deploy existente, e remover a variável do schema faria o
+   * `serverEnv()` aceitar em silêncio um ambiente que ainda a define achando
+   * que ela importa. Opcional documenta que virou legado. Pode ser removida
+   * dos ambientes na próxima limpeza.
+   */
+  CERT_ENCRYPTION_KEY: z.string().optional(),
   MOCK_FISCAL_TAXA_FALHA: z.string().optional(),
   /**
    * Focus NFe (provider fiscal real). Opcional aqui porque só é exigido de

@@ -145,6 +145,29 @@ export interface EmitirNfseResult {
   resultadoCalculado?: ResultadoCalculoIBSCBS | null;
 }
 
+/**
+ * Certificado A1 a caminho do provider — em trânsito, nunca em repouso.
+ *
+ * Este objeto existe pelo tempo de uma requisição e não é persistido em lugar
+ * nenhum: nem em banco, nem em storage, nem em log. Ver `enviarCertificado`.
+ */
+export interface CertificadoA1 {
+  /** Conteúdo do .pfx/.p12. */
+  arquivo: Buffer;
+  senha: string;
+}
+
+/** O que o provider devolve depois de aceitar o certificado. */
+export interface CertificadoRegistrado {
+  /** Id da empresa no provider — necessário para trocar o certificado depois. */
+  providerEmpresaId: string;
+  /** `yyyy-mm-dd`. É o que permite avisar antes de vencer. */
+  validoAte: string | null;
+  validoDe: string | null;
+  /** CNPJ que consta no certificado, para conferir contra o da empresa. */
+  cnpjDoCertificado: string | null;
+}
+
 export interface FiscalProvider {
   readonly nome: string;
 
@@ -161,4 +184,37 @@ export interface FiscalProvider {
    * (ex.: timeout após o envio: a nota pode ter sido emitida).
    */
   consultarPorReferencia(referenciaExterna: string): Promise<EmitirNfseResult | null>;
+
+  /**
+   * Envia o certificado A1 da empresa ao provider, que passa a guardá-lo.
+   *
+   * POR QUE O CERTIFICADO NÃO FICA CONOSCO. O A1 assina documento fiscal em nome
+   * da empresa — quem tem o arquivo e a senha assume obrigações no CNPJ dela.
+   * Guardar certificado de TERCEIRO (o cliente do contador) concentra um risco
+   * que não temos como diluir: por melhor que seja a criptografia, o dano de um
+   * vazamento é jurídico, não técnico.
+   *
+   * O provider já precisa do certificado para assinar, e já é responsável por
+   * guardá-lo. Repassar e não manter cópia não é delegar risco: é deixar de
+   * criar um segundo lugar de onde ele pode vazar.
+   *
+   * IMPLEMENTAÇÕES DEVEM: não gravar `certificado` em log, não devolvê-lo, e
+   * não persistir a senha. O `Buffer` vive o tempo da requisição.
+   *
+   * OPCIONAL no contrato: provider que não guarda certificado simplesmente não
+   * implementa, e a tela mostra isso em vez de fingir que salvou.
+   */
+  enviarCertificado?(params: {
+    empresa: {
+      cnpj: string;
+      razaoSocial: string;
+      inscricaoMunicipal: string | null;
+      codigoMunicipioIbge: string;
+      emailContato: string;
+      regimeTributario: string;
+    };
+    certificado: CertificadoA1;
+    /** Quando presente, ATUALIZA a empresa existente em vez de criar outra. */
+    providerEmpresaId?: string | null;
+  }): Promise<CertificadoRegistrado>;
 }

@@ -1,7 +1,7 @@
-import { createCipheriv, randomBytes } from "node:crypto";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { type Database } from "@/types/database";
+import { type FiscalProvider } from "@/lib/fiscal/provider";
 import { REGIMES_TRIBUTARIOS } from "@/lib/fiscal/regimes";
 import {
   REGIME_APURACAO_SN,
@@ -12,9 +12,13 @@ import {
 /**
  * Configurações da empresa: dados fiscais do CNPJ + certificado digital A1.
  *
- * O certificado A1 (.pfx) é criptografado com AES-256-GCM ANTES de sair da
- * memória do servidor — nunca é gravado em claro. A senha do certificado
- * também é criptografada. A chave vem de CERT_ENCRYPTION_KEY (env, regra 4).
+ * O certificado A1 NÃO é armazenado aqui. Ele é repassado ao provider fiscal,
+ * que já precisa dele para assinar e já é responsável por guardá-lo — ver
+ * `enviarCertificadoA1`. Deste lado ficam apenas o id da empresa no provider e
+ * as datas de validade, que não são segredo.
+ *
+ * A versão anterior cifrava o .pfx com AES-256-GCM num bucket privado. Era boa
+ * proteção para um risco que a decisão de 12/08/2026 eliminou pela raiz.
  */
 
 /**
@@ -51,7 +55,7 @@ export const dadosFiscaisSchema = z
     inscricaoMunicipal: z.string().max(30).optional(),
     codigoMunicipioIbge: z.string().regex(/^\d{7}$/, "Código IBGE deve ter 7 dígitos"),
     // Lista em `lib/fiscal/regimes.ts` porque a tela precisa dos mesmos valores
-    // e não pode importar este módulo, que puxa `node:crypto`.
+    // e não pode importar este módulo, que é server-only.
     regimeTributario: z.enum(REGIMES_TRIBUTARIOS),
     emailContato: z.string().email(),
     // Reforma tributária: CNAE (base do enquadramento) e regime de apuração
@@ -247,19 +251,9 @@ export async function atualizarProviderFiscal(
 // Certificado A1
 // ---------------------------------------------------------------------------
 
-interface Cifrado {
-  /** iv(12) + authTag(16) + ciphertext, base64 */
-  blob: string;
-}
-
-function cifrar(dados: Buffer, chaveBase64: string): Cifrado {
-  const chave = Buffer.from(chaveBase64, "base64");
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", chave, iv);
-  const ciphertext = Buffer.concat([cipher.update(dados), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  return { blob: Buffer.concat([iv, authTag, ciphertext]).toString("base64") };
-}
+// `cifrar()` e o import de node:crypto sairam junto com o armazenamento: nao ha
+// mais segredo nosso para cifrar. O que este modulo guarda do certificado sao
+// datas de validade e o id da empresa no provider — nada disso e sigiloso.
 
 /**
  * Checagem de magic bytes do .pfx (item M1).
@@ -285,15 +279,30 @@ export function pareceArquivoPfx(buffer: Buffer): boolean {
   return comprimento === 0x81 || comprimento === 0x82 || comprimento === 0x83;
 }
 
-export async function salvarCertificadoA1(
+/**
+ * Envia o certificado A1 ao provider fiscal. NÃO o armazena.
+ *
+ * A versão anterior cifrava o .pfx e a senha com AES-256-GCM e guardava num
+ * bucket privado. Funcionava — e protegia um risco que agora não existe mais.
+ * Com o multi-empresa passaríamos a guardar certificados de TERCEIROS (os
+ * clientes do escritório), e esse risco não é diluível: o A1 assina documento
+ * fiscal em nome da empresa, então o dano de um vazamento é jurídico, não
+ * técnico. O provider já precisa do certificado e já é responsável por
+ * guardá-lo; manter uma segunda cópia só criava um segundo lugar de onde
+ * vazar.
+ *
+ * O QUE FICA GRAVADO AQUI: o id da empresa no provider (para poder TROCAR o
+ * certificado depois) e as datas de validade (para avisar antes de vencer).
+ * Nada disso é segredo. O arquivo e a senha vivem o tempo desta função.
+ *
+ * A validação de magic bytes permanece: rejeitar um .pem renomeado aqui poupa
+ * uma ida de rede e devolve erro melhor que o do provider.
+ */
+export async function enviarCertificadoA1(
   db: SupabaseClient<Database>,
-  params: {
-    empresaId: string;
-    arquivoPfx: Buffer;
-    senhaPfx: string;
-    chaveCriptografiaBase64: string;
-  },
-): Promise<void> {
+  provider: FiscalProvider,
+  params: { empresaId: string; arquivoPfx: Buffer; senhaPfx: string },
+): Promise<{ validoAte: string | null }> {
   if (params.arquivoPfx.length === 0 || params.arquivoPfx.length > 512 * 1024) {
     throw new Error("Arquivo .pfx inválido (vazio ou maior que 512 KB).");
   }
@@ -308,20 +317,64 @@ export async function salvarCertificadoA1(
     throw new Error("Senha do certificado é obrigatória.");
   }
 
-  const certificado = cifrar(params.arquivoPfx, params.chaveCriptografiaBase64);
-  const senha = cifrar(Buffer.from(params.senhaPfx, "utf8"), params.chaveCriptografiaBase64);
-
-  // Bucket privado — sem URL pública; leitura só pelo motor (service_role)
-  const caminho = `${params.empresaId}/certificado-a1.enc`;
-
-  const { error: erroUpload } = await db.storage
-    .from("certificados")
-    .upload(caminho, Buffer.from(JSON.stringify({ certificado: certificado.blob, senha: senha.blob })), {
-      contentType: "application/octet-stream",
-      upsert: true,
-    });
-
-  if (erroUpload) {
-    throw new Error(`Falha ao armazenar certificado: ${erroUpload.message}`);
+  if (!provider.enviarCertificado) {
+    throw new Error(
+      `O provider "${provider.nome}" não guarda certificado digital. Troque o provider ` +
+        "em Configurações antes de enviar o certificado.",
+    );
   }
+
+  const { data: empresa, error: erroEmpresa } = await db
+    .from("empresas")
+    .select(
+      "cnpj, razao_social, inscricao_municipal, codigo_municipio_ibge, email_contato, regime_tributario, provider_empresa_id",
+    )
+    .eq("id", params.empresaId)
+    .single();
+
+  if (erroEmpresa || !empresa) {
+    throw new Error(`Empresa não encontrada: ${erroEmpresa?.message ?? "sem dados"}`);
+  }
+
+  const registrado = await provider.enviarCertificado({
+    empresa: {
+      cnpj: empresa.cnpj,
+      razaoSocial: empresa.razao_social,
+      inscricaoMunicipal: empresa.inscricao_municipal,
+      codigoMunicipioIbge: empresa.codigo_municipio_ibge,
+      emailContato: empresa.email_contato,
+      regimeTributario: empresa.regime_tributario,
+    },
+    certificado: { arquivo: params.arquivoPfx, senha: params.senhaPfx },
+    providerEmpresaId: empresa.provider_empresa_id,
+  });
+
+  // Conferência que só dá para fazer DEPOIS de o provider ler o certificado:
+  // certificado de outro CNPJ assina, mas assina errado — e a rejeição viria
+  // muito depois, na primeira nota.
+  const soDigitos = (v: string | null) => (v ?? "").replace(/\D/g, "");
+  if (
+    registrado.cnpjDoCertificado &&
+    soDigitos(registrado.cnpjDoCertificado) !== soDigitos(empresa.cnpj)
+  ) {
+    throw new Error(
+      `O certificado enviado é do CNPJ ${registrado.cnpjDoCertificado}, mas esta empresa ` +
+        `é o CNPJ ${empresa.cnpj}. Envie o certificado correspondente.`,
+    );
+  }
+
+  const { error } = await db
+    .from("empresas")
+    .update({
+      provider_empresa_id: registrado.providerEmpresaId,
+      certificado_valido_de: registrado.validoDe,
+      certificado_valido_ate: registrado.validoAte,
+      certificado_cnpj: registrado.cnpjDoCertificado,
+      certificado_enviado_em: new Date().toISOString(),
+    })
+    .eq("id", params.empresaId);
+
+  if (error) throw new Error(`Certificado enviado, mas falhou ao registrar: ${error.message}`);
+
+  return { validoAte: registrado.validoAte };
 }
