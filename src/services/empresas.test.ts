@@ -7,7 +7,7 @@ import {
   enviarCertificadoA1,
 } from "@/services/empresas";
 import { fakeSupabase, type FakeResult } from "@/test-utils/fake-supabase";
-import { diasAtePrazoOpcao, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
+import { diasAtePrazoOpcao, janelaOpcaoRegime, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
 
 /**
  * O ponto destes testes é a validação, não o UPDATE. Sem ela, o tenant salvaria
@@ -414,16 +414,46 @@ describe("enviarCertificadoA1 — o certificado vai para o provider, nao para o 
 // Prazo do art. 41, §3o da LC 214/2025 — setembro/2026.
 // ---------------------------------------------------------------------------
 
-describe("prazo da opcao de regime de apuracao", () => {
-  it("aberto ate 30/09/2026 inclusive, fechado no dia seguinte", () => {
-    expect(prazoOpcaoAberto(new Date("2026-08-10T12:00:00Z"))).toBe(true);
-    expect(prazoOpcaoAberto(new Date("2026-09-30T23:00:00Z"))).toBe(true);
-    expect(prazoOpcaoAberto(new Date("2026-10-01T00:00:00Z"))).toBe(false);
+describe("janela da opcao de regime de apuracao (B5)", () => {
+  // O defeito que este bloco existe para impedir: o modelo antigo dizia
+  // "prazo aberto" em agosto, antes de a janela abrir em 01/09.
+  it("antes de 01/09/2026 a janela NAO esta aberta", () => {
+    const j = janelaOpcaoRegime(new Date("2026-08-12T12:00:00Z"));
+    expect(j.fase).toBe("antes_da_abertura");
+    expect(j.aberta).toBe(false);
+    expect(prazoOpcaoAberto(new Date("2026-08-12T12:00:00Z"))).toBe(false);
   });
 
-  it("conta os dias restantes e fica negativo depois de vencido", () => {
-    expect(diasAtePrazoOpcao(new Date("2026-09-29T00:00:00Z"))).toBeGreaterThan(0);
-    expect(diasAtePrazoOpcao(new Date("2026-10-15T00:00:00Z"))).toBeLessThan(0);
+  it("abre em 01/09 e fecha depois de 30/09", () => {
+    expect(janelaOpcaoRegime(new Date("2026-09-01T12:00:00Z")).fase).toBe("primeira_janela");
+    expect(janelaOpcaoRegime(new Date("2026-09-30T12:00:00Z")).aberta).toBe(true);
+    expect(janelaOpcaoRegime(new Date("2026-10-01T12:00:00Z")).aberta).toBe(false);
+  });
+
+  it("depois de vencer entra em arrependimento ate 30/11, nao em 'acabou'", () => {
+    expect(janelaOpcaoRegime(new Date("2026-10-15T12:00:00Z")).fase).toBe("arrependimento");
+    expect(janelaOpcaoRegime(new Date("2026-11-30T12:00:00Z")).fase).toBe("arrependimento");
+    expect(janelaOpcaoRegime(new Date("2026-12-01T12:00:00Z")).fase).toBe("entre_janelas");
+  });
+
+  it("reabre em marco/2027 e encerra depois de 31/03", () => {
+    expect(janelaOpcaoRegime(new Date("2027-03-01T12:00:00Z")).aberta).toBe(true);
+    expect(janelaOpcaoRegime(new Date("2027-03-31T12:00:00Z")).aberta).toBe(true);
+    expect(janelaOpcaoRegime(new Date("2027-04-01T12:00:00Z")).fase).toBe("encerrada");
+  });
+
+  // O prazo vence a meia-noite de BRASILIA. As 21h de 30/09 em Sao Paulo o UTC
+  // ja e 01/10 — o modelo antigo (toISOString) fechava a janela 3h mais cedo.
+  it("usa a data civil brasileira, nao UTC", () => {
+    const trintaESetembroTardeBRT = new Date("2026-09-30T21:30:00-03:00");
+    expect(trintaESetembroTardeBRT.toISOString().slice(0, 10)).toBe("2026-10-01");
+    expect(janelaOpcaoRegime(trintaESetembroTardeBRT).aberta).toBe(true);
+  });
+
+  it("conta os dias ate a proxima virada de fase, nunca negativo", () => {
+    expect(diasAtePrazoOpcao(new Date("2026-08-12T12:00:00Z"))).toBeGreaterThan(0);
+    expect(diasAtePrazoOpcao(new Date("2026-10-15T12:00:00Z"))).toBeGreaterThan(0);
+    expect(diasAtePrazoOpcao(new Date("2027-04-10T12:00:00Z"))).toBe(0);
   });
 
   it("registra a confirmacao ao salvar, para optante", async () => {

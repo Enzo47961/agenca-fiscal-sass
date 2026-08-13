@@ -17,7 +17,7 @@ import {
 // (chama serverEnv()) e NÃO pode entrar no bundle do cliente.
 import type { ProviderInfo } from "@/lib/fiscal/providers";
 import { REGIME_APURACAO_SN_LABEL } from "@/lib/fiscal/ibscbs";
-import { diasAtePrazoOpcao, prazoOpcaoAberto } from "@/lib/fiscal/regimes";
+import { janelaOpcaoRegime } from "@/lib/fiscal/regimes";
 import {
   salvarDadosFiscaisAction,
   salvarProviderFiscalAction,
@@ -222,12 +222,31 @@ export function FormularioConfiguracoes({
   const aceitaRegimeApuracao = regime === "simples_nacional" || regime === "mei";
   const optouPeloRegular = apuracao === "cbs_sn_ibs_regular" || apuracao === "ambos_regime_regular";
 
-  // Prazo do art. 41, §3º. `useMemo` sem dependências: a data é lida uma vez
-  // por render do formulário, e recalcular a cada tecla não muda nada.
-  const { prazoAberto, diasRestantes } = useMemo(
-    () => ({ prazoAberto: prazoOpcaoAberto(), diasRestantes: Math.max(0, diasAtePrazoOpcao()) }),
-    [],
-  );
+  // Janela de opção (B5). `useMemo` sem dependências: a data é lida uma vez por
+  // render do formulário, e recalcular a cada tecla não muda nada.
+  const janela = useMemo(() => janelaOpcaoRegime(), []);
+
+  // O título muda com a FASE, não só com "aberto/vencido". O modelo anterior só
+  // sabia dizer as duas pontas e, em agosto, anunciava prazo aberto para uma
+  // janela que só abre em setembro.
+  const tituloJanela = ((): string => {
+    const d = janela.diasAteProximaData ?? 0;
+    const dias = `${d} ${d === 1 ? "dia" : "dias"}`;
+    switch (janela.fase) {
+      case "antes_da_abertura":
+        return `A janela de opção abre em 1º de setembro de 2026 — faltam ${dias}.`;
+      case "primeira_janela":
+        return `Você ainda não registrou sua opção — faltam ${dias} para 30 de setembro.`;
+      case "arrependimento":
+        return `O prazo para optar venceu. Ainda dá para cancelar uma opção já feita: faltam ${dias}.`;
+      case "entre_janelas":
+        return `Fora da janela. A próxima é em março de 2027 — faltam ${dias}.`;
+      case "segunda_janela":
+        return `Segunda janela aberta — faltam ${dias}. Efeitos no 2º semestre de 2027.`;
+      case "encerrada":
+        return "Fora das janelas cobertas pelas normas que consultamos. Confirme com seu contador.";
+    }
+  })();
   const precisaDecidirApuracao =
     aceitaRegimeApuracao && !dadosIniciais.regimeApuracaoConfirmadoEm;
 
@@ -377,28 +396,33 @@ export function FormularioConfiguracoes({
                 <div
                   role="status"
                   className={`mt-3 rounded-lg border px-3 py-2.5 text-xs ${
-                    prazoAberto
+                    janela.aberta
                       ? "border-amber-300 bg-amber-50 text-amber-900"
-                      : "border-red-300 bg-red-50 text-red-900"
+                      : janela.fase === "antes_da_abertura" || janela.fase === "entre_janelas"
+                        ? "border-slate-300 bg-slate-50 text-slate-700"
+                        : "border-red-300 bg-red-50 text-red-900"
                   }`}
                 >
-                  <p className="font-medium">
-                    {prazoAberto
-                      ? `Você ainda não registrou sua opção — faltam ${diasRestantes} ${
-                          diasRestantes === 1 ? "dia" : "dias"
-                        }.`
-                      : "O prazo para comunicar a opção venceu."}
-                  </p>
+                  <p className="font-medium">{tituloJanela}</p>
                   <p className="mt-1">
-                    Até <strong>30 de setembro de 2026</strong>, o optante pelo Simples Nacional
-                    comunica se apura IBS e CBS dentro do Simples ou pelo regime regular
-                    (art. 41, §3º da LC 214/2025).{" "}
+                    O optante pelo Simples Nacional comunica se apura IBS e CBS dentro do
+                    Simples ou pelo regime regular (art. 41, §3º da LC 214/2025). A janela de
+                    2026 vai de <strong>1º a 30 de setembro</strong>, com efeitos a partir de
+                    1º de janeiro de 2027; quem optar pode voltar atrás até{" "}
+                    <strong>30 de novembro de 2026</strong>, e em{" "}
+                    <strong>março de 2027</strong> há nova oportunidade, com efeitos no segundo
+                    semestre.{" "}
                     <strong>Quem não se manifestar permanece no regime unificado</strong> — o
-                    silêncio já é uma resposta, e ela vale até a próxima janela.
+                    silêncio já é uma resposta.
                   </p>
                   <p className="mt-1">
                     Escolha abaixo e salve para registrar sua decisão aqui. A comunicação ao
                     Fisco é feita fora deste sistema.
+                  </p>
+                  <p className="mt-2 text-[11px] opacity-80">
+                    Prazos conforme a Resolução CGSN nº 186/2026 (publicada em 17/04/2026),
+                    divulgados pelo portal do Simples Nacional. Confirme com seu contador antes
+                    de decidir.
                   </p>
                 </div>
               ) : null}
