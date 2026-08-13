@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { CheckCircle2, HelpCircle, Loader2, SendHorizonal, XCircle } from "lucide-react";
 import { consultarCorrelacaoAction, emitirNotaAction, type EmissaoResult } from "./actions";
@@ -10,6 +10,7 @@ import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
 // `loc_imoveis` volta a aparecer quando o grupo `imovel/` existir.
 import { REGIME_IBSCBS_LABEL } from "@/lib/fiscal/reforma";
 import { REGIMES_NBS_SOB_DUVIDA } from "@/lib/fiscal/regimes";
+import { dataCivilBr } from "@/lib/data-br";
 import {
   MAX_DOCUMENTOS_AJUSTE,
   TIPO_AJUSTE_DOC_LABEL,
@@ -262,6 +263,10 @@ export function FormularioEmissao({
 }) {
   const [enviando, startTransition] = useTransition();
   const [resultado, setResultado] = useState<EmissaoResult | null>(null);
+  // Data civil brasileira: default e teto do campo de competência (B4).
+  // `useMemo` sem dependências — a data não muda enquanto o formulário está
+  // aberto, e recalcular a cada tecla só criaria trabalho.
+  const hojeBr = useMemo(() => dataCivilBr(), []);
   // C7: a confirmação só faz sentido — e só é exigida — fora do regime padrão.
   const [regime, setRegime] = useState<string>("padrao");
 
@@ -374,6 +379,30 @@ export function FormularioEmissao({
         <label className="block">
           <span className="mb-1 block text-sm text-slate-600">Valor do serviço (R$) *</span>
           <input name="valor" required inputMode="decimal" placeholder="1500,00" className={inputClasses} />
+        </label>
+
+        {/*
+          Competência (B4). Antes era fixada no servidor como "hoje" em UTC —
+          o usuário não escolhia, e às 22h a data já pulava para o dia seguinte.
+          `max` impede a data futura no browser; o schema repete a checagem no
+          servidor, porque validação de tela não é validação.
+        */}
+        <label className="block">
+          <span className="mb-1 block text-sm text-slate-600">Competência *</span>
+          <input
+            type="date"
+            name="competencia"
+            required
+            defaultValue={hojeBr}
+            max={hojeBr}
+            className={inputClasses}
+          />
+          <Ajuda>
+            Mês/ano a que o serviço se refere. Define a apuração e as regras
+            aplicadas — a partir de 2027, por exemplo, PIS e COFINS deixam de ser
+            dedutíveis da base. Emitindo hoje um serviço do mês passado, informe a
+            data do mês passado.
+          </Ajuda>
         </label>
 
         <label className="block">

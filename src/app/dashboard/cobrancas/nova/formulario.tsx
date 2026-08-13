@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { CheckCircle2, Copy, ExternalLink, HelpCircle, Loader2, Send } from "lucide-react";
 import { criarCobrancaAction, type CobrancaResult } from "./actions";
 import { REGIME_IBSCBS_LABEL } from "@/lib/fiscal/reforma";
+import { dataCivilBr } from "@/lib/data-br";
 
 const inputClasses =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500";
@@ -28,9 +29,11 @@ export function FormularioCobranca({
   const [resultado, setResultado] = useState<CobrancaResult | null>(null);
   const [copiado, setCopiado] = useState(false);
 
-  const hoje = new Date();
-  hoje.setDate(hoje.getDate() + 3);
-  const vencimentoPadrao = hoje.toISOString().slice(0, 10);
+  // Vencimento padrão: 3 dias corridos a partir de HOJE no calendário brasileiro.
+  // Era `toISOString()`, que às 21h já contava a partir de amanhã e sugeria 4
+  // dias. Mesmo defeito do B4; aqui é só um default editável, mas a data que o
+  // cliente vê no boleto vinha de um dia que ainda não tinha começado.
+  const vencimentoPadrao = dataCivilBr(new Date(Date.now() + 3 * 86_400_000));
 
   async function copiarLink(link: string) {
     await navigator.clipboard.writeText(link);

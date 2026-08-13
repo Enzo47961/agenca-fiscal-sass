@@ -1,6 +1,7 @@
 "use server";
 
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
+import { dataCivilBr } from "@/lib/data-br";
 import { solicitarEmissao, solicitarEmissaoSchema } from "@/services/notas";
 import { correlacaoDoItem } from "@/services/dominio-fiscal";
 import { type CorrelacaoItem } from "@/lib/fiscal/correlacao";
@@ -70,7 +71,18 @@ export async function emitirNotaAction(formData: FormData): Promise<EmissaoResul
     valorServicoCentavos: valorCentavos ?? -1,
     aliquotaIss: Number(formData.get("aliquotaIss") ?? "0") / 100, // % → fração
     issRetido: formData.get("issRetido") === "on",
-    competencia: new Date().toISOString().slice(0, 10),
+    // Competência (B4). Duas correções num campo só:
+    //
+    // 1. FUSO. Era `new Date().toISOString().slice(0, 10)` — UTC. O Brasil está
+    //    em UTC−3, então das 21h à meia-noite o "hoje" já era amanhã: uma nota
+    //    das 22h de 31/08 nascia com competência 2026-09-01, no mês errado de
+    //    apuração. `dataCivilBr()` lê o calendário de quem emite.
+    //
+    // 2. ESCOLHA. Era sempre "hoje", sem alternativa. Emitir no dia 2 uma nota
+    //    do serviço prestado no mês anterior era impossível — e isso é rotina
+    //    de escritório de contabilidade, não caso raro. Agora o formulário
+    //    manda o valor; ausente, cai em hoje, que continua sendo o caso comum.
+    competencia: String(formData.get("competencia") ?? "").trim() || dataCivilBr(),
     codigoNbs: (formData.get("codigoNbs") as string | null)?.trim() || undefined,
     regimeIbsCbs: (formData.get("regimeIbsCbs") as string | null) || undefined,
     // Componentes da base de cálculo (B7). Campo em branco → `undefined`, que

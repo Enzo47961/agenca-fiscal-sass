@@ -944,6 +944,14 @@ export type Database = {
           razao_social: string
         }[]
       }
+      notas_abandonadas: {
+        Args: { p_limite?: number }
+        Returns: {
+          atualizado_em: string
+          empresa_id: string
+          nota_id: string
+        }[]
+      }
       transicionar_status_nota: {
         Args: {
           p_erro_codigo?: string

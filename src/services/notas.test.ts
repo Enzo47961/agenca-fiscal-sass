@@ -6,6 +6,7 @@ vi.mock("@/inngest/client", () => ({ inngest: { send: vi.fn() } }));
 import { solicitarEmissao, solicitarEmissaoSchema } from "@/services/notas";
 import { fakeSupabase, type FakeCtx } from "@/test-utils/fake-supabase";
 import { limparCacheDominioFiscal } from "@/services/dominio-fiscal";
+import { dataCivilBr } from "@/lib/data-br";
 
 const base = {
   empresaId: "22222222-2222-2222-2222-222222222222",
@@ -29,6 +30,25 @@ describe("solicitarEmissaoSchema", () => {
 
   it("rejeita competência malformada", () => {
     expect(() => solicitarEmissaoSchema.parse({ ...base, competencia: "18/07/2026" })).toThrow();
+  });
+
+  // B4 — a competência passou a ser escolhida pelo usuário, então precisa de
+  // guarda. É de qualidade de dado, não fiscal: data futura é erro de digitação.
+  it("aceita competência passada — emitir hoje serviço do mês anterior é rotina", () => {
+    expect(solicitarEmissaoSchema.parse({ ...base, competencia: "2026-07-18" }).competencia).toBe(
+      "2026-07-18",
+    );
+  });
+
+  it("aceita a data civil brasileira de hoje", () => {
+    expect(() =>
+      solicitarEmissaoSchema.parse({ ...base, competencia: dataCivilBr() }),
+    ).not.toThrow();
+  });
+
+  it("rejeita competência no futuro", () => {
+    const amanha = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    expect(() => solicitarEmissaoSchema.parse({ ...base, competencia: amanha })).toThrow();
   });
 
   it("rejeita valor não-positivo", () => {
@@ -290,12 +310,27 @@ describe("solicitarEmissao — base de cálculo do IBS/CBS (B7)", () => {
     ).rejects.toThrow(/tipo do ajuste/i);
   });
 
-  it("recusa PIS/COFINS a partir de 2027 antes de criar a nota", async () => {
+  /**
+   * INTERAÇÃO ENTRE B4 E A REGRA DE 2027, registrada aqui de propósito.
+   *
+   * Este teste antes mandava `competencia: "2027-01-05"` para exercitar a recusa
+   * de PIS/COFINS. Com a guarda de data futura (B4), 2027 não passa mais pelo
+   * schema enquanto estivermos em 2026 — e isso está CERTO: ninguém emite hoje
+   * uma nota com competência do ano que vem.
+   *
+   * A consequência prática vale ser dita: até 01/01/2027 não há como criar nota
+   * de 2027 pela tela, então nem a recusa de PIS/COFINS nem o bloqueio de
+   * alíquota não fixada são alcançáveis pelo usuário. As duas regras seguem
+   * cobertas onde vivem — `lib/fiscal/base-calculo.test.ts` e
+   * `lib/fiscal/reforma.test.ts` — que é o nível certo para testá-las, porque lá
+   * a competência é parâmetro puro e não depende de que dia é hoje.
+   */
+  it("recusa competência de 2027 enquanto estamos em 2026 (guarda de data futura)", async () => {
     const { db } = dbCapturandoInsert();
 
     await expect(
       solicitarEmissao(db, { ...base, competencia: "2027-01-05", pisCentavos: 100 }),
-    ).rejects.toThrow(/PIS\/COFINS/);
+    ).rejects.toThrow(/futuro/i);
   });
 });
 

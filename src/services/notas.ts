@@ -3,6 +3,7 @@ import { z } from "zod";
 import { inngest } from "@/inngest/client";
 import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
 import { type Database } from "@/types/database";
+import { dataCivilBr } from "@/lib/data-br";
 import {
   REGIME_IBSCBS,
   TIPO_AJUSTE_BASE,
@@ -32,7 +33,25 @@ export const solicitarEmissaoSchema = z.object({
   valorServicoCentavos: z.number().int().positive(),
   aliquotaIss: z.number().min(0).max(1),
   issRetido: z.boolean().default(false),
-  competencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /**
+   * Competência da nota (item B4). Governa a fórmula da base, as alíquotas de
+   * vigência e o período de apuração — não é decoração.
+   *
+   * A guarda é de QUALIDADE DE DADO, não fiscal: competência no futuro é erro
+   * de digitação ou de integração. Não há aqui nenhum limite inferior
+   * inventado — quem tentar uma competência anterior à vigência do IBS/CBS
+   * esbarra em `aliquotasReferencia()`, que já sabe dizer, com fundamento, que
+   * não há alíquota para aquele ano.
+   *
+   * A comparação é contra a data CIVIL brasileira. Contra UTC, quem emitisse
+   * às 21h teria a própria competência de hoje recusada como "futura".
+   */
+  competencia: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((d) => d <= dataCivilBr(), {
+      message: "Competência no futuro: revise a data do serviço prestado.",
+    }),
   // Reforma tributária (opcionais — default seguro para o modelo antigo)
   codigoNbs: z.string().min(1).max(30).nullish(),
   regimeIbsCbs: z.enum(REGIME_IBSCBS).default("padrao"),

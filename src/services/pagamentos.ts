@@ -3,6 +3,7 @@ import { type Database } from "@/types/database";
 import { solicitarEmissao } from "./notas";
 import { type Centavos } from "@/types/domain";
 import { type RegimeIbsCbs } from "@/lib/fiscal/reforma";
+import { dataCivilBr } from "@/lib/data-br";
 
 /**
  * Pagamento confirmado (Pix/Asaas) → nota fiscal `pendente` + evento Inngest.
@@ -50,7 +51,15 @@ export async function processarPagamentoConfirmado(
     valorServicoCentavos: input.valorCentavos,
     aliquotaIss: input.aliquotaIss,
     issRetido: input.issRetido,
-    competencia: new Date().toISOString().slice(0, 10),
+    // Mesma correção de fuso do B4, aqui no caminho AUTOMÁTICO (pagamento
+    // confirmado → nota). Esta ocorrência escapou da primeira varredura e foi
+    // apanhada pela guarda de data futura do schema: às 22h de Brasília o UTC
+    // já é amanhã, e a própria nota que o sistema estava criando era recusada
+    // como "competência no futuro".
+    //
+    // Aqui não há escolha do usuário — o fato gerador é o pagamento, que é
+    // agora —, então a data civil de hoje é a resposta certa, sem campo.
+    competencia: dataCivilBr(),
     codigoNbs: input.codigoNbs ?? null,
     regimeIbsCbs: input.regimeIbsCbs ?? "padrao",
     valorLiquidoCentavos: input.valorLiquidoCentavos ?? null,
