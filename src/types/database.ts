@@ -488,6 +488,66 @@ export type Database = {
         }
         Relationships: []
       }
+      franquia_alertas: {
+        Row: {
+          competencia: string
+          enviado_em: string
+          nivel: string
+          notas_emitidas: number
+          projecao: number
+        }
+        Insert: {
+          competencia: string
+          enviado_em?: string
+          nivel: string
+          notas_emitidas: number
+          projecao: number
+        }
+        Update: {
+          competencia?: string
+          enviado_em?: string
+          nivel?: string
+          notas_emitidas?: number
+          projecao?: number
+        }
+        Relationships: []
+      }
+      franquia_provider: {
+        Row: {
+          criado_em: string
+          custo_excedente_centavos: number
+          fonte: string
+          id: number
+          notas_franquia: number
+          plano: string
+          provider: string
+          vigencia_fim: string | null
+          vigencia_inicio: string
+        }
+        Insert: {
+          criado_em?: string
+          custo_excedente_centavos: number
+          fonte: string
+          id?: number
+          notas_franquia: number
+          plano: string
+          provider: string
+          vigencia_fim?: string | null
+          vigencia_inicio: string
+        }
+        Update: {
+          criado_em?: string
+          custo_excedente_centavos?: number
+          fonte?: string
+          id?: number
+          notas_franquia?: number
+          plano?: string
+          provider?: string
+          vigencia_fim?: string | null
+          vigencia_inicio?: string
+        }
+        Relationships: []
+      }
       item_lc116_cclasstrib: {
         Row: {
           cclasstrib: string
@@ -920,6 +980,25 @@ export type Database = {
       }
     }
     Functions: {
+      consumo_franquia_mes: {
+        Args: { p_referencia?: string }
+        Returns: {
+          competencia: string
+          custo_excedente_centavos: number
+          dia_do_mes: number
+          dias_no_mes: number
+          franquia: number
+          notas_emitidas: number
+        }[]
+      }
+      consumo_franquia_por_empresa: {
+        Args: { p_limite?: number; p_referencia?: string }
+        Returns: {
+          empresa_id: string
+          notas_emitidas: number
+          razao_social: string
+        }[]
+      }
       criar_minha_empresa: {
         Args: {
           p_cnpj: string

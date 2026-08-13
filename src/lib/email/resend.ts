@@ -100,6 +100,54 @@ export function urlSegura(valor: string | null | undefined): string | null {
 // Template: nota fiscal emitida
 // ---------------------------------------------------------------------------
 
+/**
+ * Alerta interno de consumo da franquia do provider. Vai para NÓS, não para
+ * cliente — por isso é seco e traz número, não tranquilização.
+ */
+export function emailFranquia(dados: {
+  nivel: string;
+  resumo: string;
+  notasEmitidas: number;
+  franquia: number;
+  projecao: number;
+  custoProjetadoReais: string;
+  diaDoMes: number;
+  diasNoMes: number;
+  maiores: Array<{ nome: string; notas: number }>;
+}): { assunto: string; html: string } {
+  const linhas = dados.maiores
+    .map(
+      (m) =>
+        `<tr><td style="padding:4px 12px 4px 0">${escaparHtml(m.nome)}</td>` +
+        `<td style="padding:4px 0;text-align:right"><strong>${m.notas}</strong></td></tr>`,
+    )
+    .join("");
+
+  return {
+    assunto: `[Agência Fiscal] ${dados.resumo}`,
+    html: `
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;color:#1e293b">
+  <h2 style="color:#1849a9;margin-bottom:4px">Franquia do provider — ${escaparHtml(dados.nivel)}</h2>
+  <p style="color:#64748b;margin-top:0">Dia ${dados.diaDoMes} de ${dados.diasNoMes}</p>
+  <table style="border-collapse:collapse;margin:16px 0">
+    <tr><td style="padding:4px 12px 4px 0">Emitidas até agora</td>
+        <td style="padding:4px 0"><strong>${dados.notasEmitidas}</strong> de ${dados.franquia}</td></tr>
+    <tr><td style="padding:4px 12px 4px 0">Projeção do mês</td>
+        <td style="padding:4px 0"><strong>${dados.projecao}</strong></td></tr>
+    <tr><td style="padding:4px 12px 4px 0">Excedente projetado</td>
+        <td style="padding:4px 0"><strong>${escaparHtml(dados.custoProjetadoReais)}</strong></td></tr>
+  </table>
+  ${linhas ? `<h3 style="font-size:14px;margin-bottom:4px">Maiores emissores do mês</h3>
+  <table style="border-collapse:collapse;font-size:13px">${linhas}</table>` : ""}
+  <p style="color:#64748b;font-size:13px;margin-top:20px">
+    Se a projeção passar da franquia, negocie o plano com o provider ANTES do fim do mês —
+    excedente pago não é reembolsado e, quando nenhum escritório estoura o próprio pool,
+    não há o que faturar de volta.
+  </p>
+</div>`.trim(),
+  };
+}
+
 export function emailNotaEmitida(dados: {
   nomeCliente: string;
   nomeEmpresa: string;

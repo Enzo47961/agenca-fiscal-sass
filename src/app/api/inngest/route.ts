@@ -4,6 +4,7 @@ import { inngest } from "@/inngest/client";
 import { emitirNfse } from "@/inngest/functions/emitir-nfse";
 import { cobrarExcedentes } from "@/inngest/functions/cobrar-excedentes";
 import { resgatarNotasPresas } from "@/inngest/functions/resgatar-notas-presas";
+import { vigiarFranquia } from "@/inngest/functions/vigiar-franquia";
 import { inngestEnv, verificarChavesInngest } from "@/lib/env";
 
 /**
@@ -44,7 +45,7 @@ function obterHandler() {
 
   handlerCache = serve({
     client: inngest,
-    functions: [emitirNfse, cobrarExcedentes, resgatarNotasPresas],
+    functions: [emitirNfse, cobrarExcedentes, resgatarNotasPresas, vigiarFranquia],
     // Explícito em vez de deixar o SDK ler do process.env: assim a origem da
     // chave é rastreável e passa pela validação do schema de ambiente (regra 4).
     signingKey,

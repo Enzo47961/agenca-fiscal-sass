@@ -25,6 +25,13 @@ const serverEnvSchema = z.object({
   /** Remetente dos e-mails. Domínio precisa estar verificado no Resend. */
   EMAIL_REMETENTE: z.string().default("Agência Fiscal <onboarding@resend.dev>"),
   /**
+   * Destinatário dos alertas OPERACIONAIS (consumo da franquia do provider).
+   * Nosso e-mail, não do cliente. Opcional: sem ele o vigia registra no log em
+   * vez de falhar — um alerta que derruba o job seria pior que o problema que
+   * ele monitora.
+   */
+  EMAIL_ALERTAS: z.string().email().optional(),
+  /**
    * Sobra do tempo em que guardávamos o certificado A1 cifrado. Desde
    * 12/08/2026 o certificado vai direto para o provider e não fica em repouso
    * aqui — não há mais nada para cifrar.
