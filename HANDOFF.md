@@ -495,6 +495,57 @@ sem ele, a base de quem trabalha com reembolso/repasse sai errada por construç�
 
 ---
 
+## 6.1 Processo de trabalho e ambiente de homologação (decidido em 14/08/2026)
+
+### A partir de agora: branch + Pull Request
+
+Até hoje **todos os commits foram direto na `main`** — nenhum branch jamais existiu no
+repositório. O `.github/workflows/ci.yml` já estava configurado para rodar nos dois gatilhos:
+
+```yaml
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+```
+
+Só que, sem PR nenhum, ele só rodava **depois** do push — com o código já em produção. Avisava
+que quebrou; não impedia de quebrar. Metade do arquivo nunca foi exercitada.
+
+**Fluxo combinado:** trabalhar em branch, abrir PR, deixar o CI passar, então mesclar. O CI vira
+portão, e não relatório póstumo.
+
+### Homologação fica para o lançamento — e o motivo
+
+A decisão foi do usuário, e o raciocínio dele é o correto: **Vercel Pro e Supabase Pro serão
+assinados de qualquer forma no lançamento** — o primeiro porque o plano Hobby proíbe uso
+comercial, o segundo porque o Free não tem backup.
+
+E o **Supabase branching é recurso do plano Pro**. Montar homologação agora exigiria um segundo
+projeto Free como banco de teste, que viraria descarte no dia da assinatura — o branching
+entrega a mesma coisa melhor: banco efêmero por PR, criado e destruído sozinho, sem um segundo
+projeto para manter sincronizado com as migrations.
+
+**Portanto: não criar ambiente duplicado.** No lançamento, ligar o branching do Supabase ao
+fluxo de PR que já estará em uso.
+
+### Enquanto isso, o preview aponta para o banco de produção
+
+Aceitável **hoje** — a base tem um usuário de teste e nenhuma nota real. Deixa de ser aceitável
+no primeiro cliente de verdade, e é esse o gatilho para ligar o branching.
+
+### Variáveis de ambiente por escopo (conferido em 14/08/2026)
+
+As três `NEXT_PUBLIC_*` que o build exige estão em **Production e Preview** — preview não
+quebra no build, que era o risco.
+
+`RESEND_API_KEY` e `EMAIL_ALERTAS` estão **só em Production**, e isso é **deliberado**: são
+opcionais no schema, então não quebram o build, e a ausência impede que um teste em branch
+dispare e-mail para um tomador real. **Não acrescentar essas duas ao escopo Preview.**
+
+---
+
 ## 7. Armadilhas conhecidas (não repita)
 
 1. **`declaracaoDaNota` escrita dentro da função Inngest sem teste** foi reconhecida como
