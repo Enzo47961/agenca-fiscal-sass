@@ -44,9 +44,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22, e nao 20, por duas razoes que apareceram no log do proprio CI:
+      # o runner ja forca as actions para Node 24 avisando que 20 esta
+      # descontinuado, e o @supabase/supabase-js declara `engines: node >=22` —
+      # cada instalacao imprimia EBADENGINE e um aviso de fim de suporte.
+      #
+      # Nada aqui obriga a Vercel: desde que o build voltou a rodar la, a versao
+      # de producao vem das configuracoes do projeto, nao deste arquivo.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # `npm ci` e não `npm install`: respeita o package-lock.json à risca, e
@@ -178,7 +185,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Instalar Vercel CLI
         run: npm install --global vercel@latest
