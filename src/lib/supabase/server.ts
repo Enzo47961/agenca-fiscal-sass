@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { publicEnv } from "@/lib/env";
@@ -7,8 +8,18 @@ import { resolverEmpresaAtiva } from "@/lib/empresa-ativa";
 /**
  * Client de sessão do usuário (cookies) — para Server Components e Server Actions.
  * RLS ativa: toda query já sai filtrada pelo tenant do usuário logado (regras 1 e 3).
+ *
+ * ENVOLVIDO EM `cache()` POR CAUSA DE LATÊNCIA, não de economia de memória.
+ * `cache()` memoriza por REQUISIÇÃO e usa a identidade dos argumentos como
+ * chave. Sem ele, o layout e a página criavam clients DIFERENTES, e aí
+ * `estadoDaSessao` — que recebe o client por parâmetro — nunca batia no cache:
+ * cada uma refazia `auth.getUser()` e a consulta de vínculos.
+ *
+ * Ou seja: os dois `cache()` (aqui e em `estadoDaSessao`) só funcionam juntos.
+ * Tirar este reintroduz a duplicação silenciosamente, sem quebrar nada — por
+ * isso está escrito aqui.
  */
-export function createSessionClient() {
+export const createSessionClient = cache(function createSessionClient() {
   const cookieStore = cookies();
   const env = publicEnv();
 
@@ -30,7 +41,7 @@ export function createSessionClient() {
       },
     },
   );
-}
+});
 
 /**
  * Resolve a empresa (tenant) do usuário logado a partir da sessão — NUNCA
@@ -84,8 +95,17 @@ export const COOKIE_EMPRESA_ATIVA = "empresa_ativa";
  *
  * O padrão é determinístico — a primeira por ordem de id — para que abrir o
  * painel duas vezes sem escolher nada leve sempre à mesma empresa.
+ *
+ * `cache()` MEMORIZA POR REQUISIÇÃO. Esta função faz DUAS idas ao Supabase
+ * (`auth.getUser()` e a consulta de vínculos), e ela é chamada tanto pelo
+ * layout do painel quanto por cada página. Sem a memória, toda navegação pagava
+ * as duas viagens em dobro — com o banco em `us-west-2` e o usuário no Brasil,
+ * isso é ~600 ms jogados fora por clique.
+ *
+ * Não é cache entre usuários nem entre requisições: o escopo é o render de UMA
+ * requisição, então não há risco de vazar sessão de um usuário para outro.
  */
-export async function estadoDaSessao(
+export const estadoDaSessao = cache(async function estadoDaSessao(
   db: ReturnType<typeof createSessionClient>,
 ): Promise<EstadoSessao> {
   const {
@@ -112,4 +132,4 @@ export async function estadoDaSessao(
   }
 
   return { tipo: "com_empresa", userId: user.id, empresaId, totalEmpresas: ids.length };
-}
+});
