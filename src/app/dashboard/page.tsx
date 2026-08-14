@@ -235,7 +235,15 @@ export default async function DashboardPage() {
                         é o documento que importa: é o XML que entra na
                         escrituração; o PDF é a via de leitura do cliente.
                       */}
-                      {nota.status === "emitida" && (nota.urlPdf || nota.urlXml) ? (
+                      {/*
+                        A condicao e SO o status. Antes exigia tambem `urlPdf ||
+                        urlXml`, e com isso o botao de cancelar — que mora aqui
+                        dentro — sumia para toda nota emitida sem anexo. E o caso
+                        do provider em simulacao, que devolve as duas URLs nulas:
+                        a nota aparecia como emitida e nao havia como cancela-la
+                        pela tela. Os links seguem condicionais um a um.
+                      */}
+                      {nota.status === "emitida" ? (
                         <span className="inline-flex items-center gap-3">
                           {nota.urlPdf && (
                             <a
