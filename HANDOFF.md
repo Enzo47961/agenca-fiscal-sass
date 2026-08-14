@@ -622,13 +622,29 @@ secret é fricção com aparência de segurança.
 
 `SUPABASE_ACCESS_TOKEN` e `SUPABASE_DB_PASSWORD`. Só isso.
 
-### Ressalva aberta
+### A corrida entre deploy e migration — FECHADA em 15/08/2026
 
-A Vercel deploya pelo gatilho de git dela, **em paralelo** ao job de migrations.
-Há uma janela de segundos em que o código novo pode estar no ar antes de a
-migration terminar. Fechar isso exigiria desligar a integração de git da Vercel e
-deployar do CI. **Enquanto não for feito: migration que remove ou renomeia coluna
-deve ser aplicada à mão, fora do horário de uso.**
+Havia uma janela: a Vercel publicava pelo gatilho de git **em paralelo** ao job de
+migrations, e nada garantia a ordem. Era a mesma classe de problema que quebrou a
+tela de relatórios.
+
+**Como foi fechado:** `vercel.json` desliga o deploy automático da `main`
+(`git.deploymentEnabled.main = false`), e o CI ganhou um job `deploy` com
+`needs: migrations`. A garantia deixou de ser de tempo e passou a ser
+estrutural — o deploy nem começa se a migration não terminar bem.
+
+**A ordem é migration primeiro, código depois**, e não o contrário: banco novo
+aguenta código velho (coluna a mais não incomoda quem não a lê); código novo
+contra banco velho é a tela de erro.
+
+**Se o deploy falhar**, produção fica na versão anterior, funcionando, com o banco
+já migrado — o desfecho seguro dos dois possíveis.
+
+Branch de PR continua gerando preview normalmente: preview não toca em produção.
+
+**Secret necessário:** `VERCEL_TOKEN`. `VERCEL_ORG_ID` e `VERCEL_PROJECT_ID` estão
+em claro no workflow de propósito — não são segredos, aparecem na URL do painel, e
+guardar dado público em secret já quebrou o CI uma vez.
 
 ---
 

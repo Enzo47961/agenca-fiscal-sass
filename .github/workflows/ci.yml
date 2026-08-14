@@ -83,12 +83,12 @@ jobs:
   # SO EM PUSH NA MAIN, e depois do DoD passar. Em pull_request nao roda — PR
   # nao pode alterar o banco de producao.
   #
-  # RESSALVA HONESTA, e ela nao esta resolvida: a Vercel faz o deploy pelo
-  # proprio gatilho de git, em paralelo a este job. Existe uma janela de alguns
-  # segundos em que o codigo novo pode estar no ar antes de a migration
-  # terminar. Fechar isso exigiria desligar a integracao de git da Vercel e
-  # deployar daqui, o que e mudanca maior. Enquanto nao for feito, migration que
-  # remove ou renomeia coluna merece ser aplicada a mao, fora do horario de uso.
+  # A CORRIDA COM O DEPLOY ESTA FECHADA. Antes, a Vercel publicava pelo proprio
+  # gatilho de git EM PARALELO a este job: havia uma janela em que o codigo novo
+  # podia estar no ar antes de a migration terminar — exatamente o que quebrou a
+  # tela de relatorios em 15/08. Agora o `vercel.json` desliga o deploy
+  # automatico da `main` e quem publica e o job `deploy`, abaixo, que so comeca
+  # depois que este aqui termina bem.
   # ---------------------------------------------------------------------------
   migrations:
     name: Migrations em producao
@@ -130,3 +130,65 @@ jobs:
           # `--yes` porque nao ha ninguem para responder a confirmacao: sem
           # TTY, o prompt do db push falha em vez de assumir sim.
           supabase db push --yes
+
+  # ---------------------------------------------------------------------------
+  # DEPLOY EM PRODUCAO
+  #
+  # POR QUE O DEPLOY SAIU DA VERCEL E VEIO PARA CA. Enquanto ela publicava pelo
+  # gatilho de git, deploy e migration corriam em paralelo e nada garantia a
+  # ordem. Encadeados aqui, a garantia e estrutural: `needs: migrations` so
+  # libera este job se o banco ja estiver em dia.
+  #
+  # A ORDEM CERTA E ESTA. Migration primeiro, codigo depois. O banco novo
+  # aguenta o codigo velho — coluna a mais nao incomoda quem nao a le. O
+  # contrario nao vale: codigo novo contra banco velho e a tela de erro que o
+  # usuario viu.
+  #
+  # SE O DEPLOY FALHAR, producao fica na versao anterior, funcionando, com o
+  # banco ja migrado. E o desfecho seguro dos dois possiveis.
+  #
+  # `vercel.json` DESLIGA o deploy automatico da `main`. Branch de PR continua
+  # gerando preview normalmente — preview nao toca em producao e e util antes do
+  # merge.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy em producao
+    needs: migrations
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-producao
+      cancel-in-progress: false
+
+    env:
+      # NAO SAO SEGREDOS, e por isso estao em claro — mesma regra que trouxe o
+      # ref do Supabase para ca depois de ele quebrar o CI como secret vazio.
+      # Ambos aparecem na URL do painel da Vercel e nao dao acesso a nada
+      # sozinhos; quem autentica e o VERCEL_TOKEN.
+      VERCEL_ORG_ID: team_PP3utzdjswflF0T7F7dVjd7L
+      VERCEL_PROJECT_ID: prj_Mi2aR1aF5hCFHIkgYOipdbWe9RFE
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar Vercel CLI
+        run: npm install --global vercel@latest
+
+      # `pull` traz as variaveis de ambiente de PRODUCAO do projeto — as mesmas
+      # que a Vercel usaria no deploy dela. Sem isso o build sairia sem elas.
+      - name: Buscar configuracao de producao
+        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+
+      # Build AQUI e deploy `--prebuilt`: assim o artefato publicado e
+      # exatamente o que este job compilou, e nao um build refeito depois com
+      # outro estado de repositorio.
+      - name: Build
+        run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Publicar
+        run: vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
