@@ -183,23 +183,34 @@ jobs:
       - name: Instalar Vercel CLI
         run: npm install --global vercel@latest
 
-      # `link` EXPLICITO antes do `pull`. A forma documentada — exportar
-      # VERCEL_ORG_ID e VERCEL_PROJECT_ID — falhou com "Could not retrieve
-      # Project Settings" na CLI 59. Nomear projeto e escopo resolve e e mais
-      # legivel: da para conferir a olho contra o painel.
+      # `link` EXPLICITO. A forma documentada — exportar VERCEL_ORG_ID e
+      # VERCEL_PROJECT_ID — falhou com "Could not retrieve Project Settings" na
+      # CLI 59. Nomear projeto e escopo resolve e e mais legivel: da para
+      # conferir a olho contra o painel.
       - name: Vincular projeto
         run: vercel link --yes --project "$VERCEL_PROJETO" --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
 
-      # `pull` traz as variaveis de ambiente de PRODUCAO do projeto — as mesmas
-      # que a Vercel usaria no deploy dela. Sem isso o build sairia sem elas.
-      - name: Buscar configuracao de producao
-        run: vercel pull --yes --environment=production --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
-
-      # Build AQUI e deploy `--prebuilt`: assim o artefato publicado e
-      # exatamente o que este job compilou, e nao um build refeito depois com
-      # outro estado de repositorio.
-      - name: Build
-        run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
-
+      # O BUILD ACONTECE NA VERCEL, nao aqui, e a razao e concreta: TODAS as
+      # variaveis de ambiente deste projeto sao do tipo `Sensitive`, que e
+      # write-only por definicao — `vercel pull` nao consegue le-las de volta.
+      #
+      # A primeira versao deste job compilava no CI e publicava com
+      # `--prebuilt`. O build quebrou em
+      #
+      #   ZodError: NEXT_PUBLIC_SUPABASE_URL — Invalid url
+      #   WARNING! Build not running on Vercel. System environment variables
+      #   will not be available.
+      #
+      # ...porque as variaveis chegaram vazias. Compilar fora da Vercel so
+      # funcionaria tornando-as legiveis no painel, o que e piorar a seguranca
+      # para ganhar conveniencia de pipeline. Nao vale a troca.
+      #
+      # `deploy` sem `--prebuilt` envia o codigo e a Vercel compila na
+      # infraestrutura dela, onde as sensiveis existem. O que perdemos e a
+      # garantia de que o artefato publicado foi compilado por este job — mas o
+      # `dod`, acima, ja provou que este commit compila.
+      #
+      # A ORDEM, que e o ponto de tudo isto, continua garantida: `needs:
+      # migrations` impede que este job comece antes de o banco estar em dia.
       - name: Publicar
-        run: vercel deploy --prebuilt --prod --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel deploy --prod --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
