@@ -19,7 +19,9 @@ import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { statusDasNotas, resumoBilling } from "@/services/dashboard";
 import { formatarCentavos, type NotaStatus } from "@/types/domain";
 import { publicEnv } from "@/lib/env";
+import { dataCivilBr } from "@/lib/data-br";
 import { listarMinhasEmpresas } from "./empresas/actions";
+import { ExportarXmls } from "./exportar-xmls";
 import { EmpresaAtiva, SeletorEmpresa } from "./empresas/seletor";
 
 export const dynamic = "force-dynamic"; // status de notas muda a cada retry
@@ -149,8 +151,17 @@ export default async function DashboardPage() {
         })}
       </section>
 
+      {/*
+        Exportação do lote do mês. Fica ACIMA da lista de notas de propósito: a
+        lista serve para conferir uma nota; a exportação serve para fechar o mês,
+        que é o trabalho recorrente de quem opera a carteira.
+      */}
+      <section aria-label="Exportar XMLs" className="mt-8">
+        <ExportarXmls competenciaPadrao={dataCivilBr().slice(0, 7)} />
+      </section>
+
       {/* Notas recentes */}
-      <section aria-label="Notas recentes" className="rounded-xl border border-slate-200 bg-white">
+      <section aria-label="Notas recentes" className="mt-8 rounded-xl border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="font-medium">Notas recentes</h2>
         </div>

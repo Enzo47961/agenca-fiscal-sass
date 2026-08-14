@@ -93,6 +93,22 @@ decide* — o id só é aceito se estiver entre os vínculos reais do usuário. 
 cai na empresa padrão em silêncio. Isso não é firula: o `empresaId` daí é usado para **gravar**
 nota e cliente, e aceitar um id não conferido significaria escrever no CNPJ errado.
 
+### Exportar XMLs — no próprio painel
+
+Baixa em um ZIP os XMLs das notas emitidas na competência, **só da empresa ativa** ou da
+**carteira inteira**. É o arquivo que entra na escrituração — o fechamento mensal do escritório,
+não a conferência de uma nota.
+
+O nome de cada arquivo leva o CNPJ, porque número de NFS-e é sequencial por prestador: duas
+empresas da carteira podem ter, ambas, a nota nº 1.
+
+Se alguma nota não tiver XML (emissor em simulação) ou falhar ao baixar, o pacote sai assim mesmo
+**e a tela avisa quantas faltaram** — um ZIP incompleto que parecesse completo entraria torto na
+contabilidade e o erro só apareceria no fechamento.
+
+Teto de 500 notas por exportação, por tempo de resposta; acima disso a tela pede para estreitar
+o alcance.
+
 ### Clientes — `/dashboard/clientes`
 
 Onde o escritório cadastra os **tomadores** de cada empresa. Cadastro completo: nome, CPF/CNPJ,
@@ -228,7 +244,8 @@ Dito aqui para você não descobrir numa reunião:
 - **Cancelamento de nota** — o sistema emite; cancelar ainda é fora dele.
 - **Importação em massa** — cadastrar 600 CNPJs hoje é um a um. Para uma carteira grande, isso
   é trabalho real e deve entrar na conversa de implantação.
-- **Relatórios e exportação** — não há exportação de notas para contabilidade.
+- **Relatórios gerenciais** — não há relatório de faturamento por período nem exportação em
+  planilha. A exportação de XMLs existe (abaixo); a de números, não.
 - **Monitoramento, ambiente de homologação e rotinas de LGPD** — ausentes.
 
 ---
