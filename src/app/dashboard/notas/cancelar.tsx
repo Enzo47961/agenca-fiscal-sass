@@ -22,6 +22,16 @@ const MAX = 255;
  *
  * O aviso sobre o PRAZO é honesto de propósito: ele é municipal e o sistema não
  * o conhece. Prometer "vai dar certo" e a prefeitura recusar é pior que avisar.
+ *
+ * APARÊNCIA DO BOTÃO. Ele era cinza até o hover e passava por rótulo estático —
+ * o usuário relatou ter descoberto que era clicável por acidente. Agora é
+ * vermelho, com borda e fundo: lê-se como botão e como ação destrutiva no mesmo
+ * olhar.
+ *
+ * Vermelho DELINEADO, não preenchido, e isso é deliberado. Botão sólido teria o
+ * mesmo peso visual de "Emitir nota" e convidaria o clique distraído numa ação
+ * que não se desfaz. O contorno resolve as duas coisas: encontra-se de longe e
+ * não se aperta sem querer.
  */
 export function BotaoCancelar({ notaId, numeroNfse }: { notaId: string; numeroNfse: string }) {
   const [aberto, setAberto] = useState(false);
@@ -37,10 +47,10 @@ export function BotaoCancelar({ notaId, numeroNfse }: { notaId: string; numeroNf
       <button
         type="button"
         onClick={() => setAberto(true)}
-        className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-red-700 hover:underline"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:border-red-400 hover:bg-red-100"
       >
         <Ban className="h-3.5 w-3.5" aria-hidden />
-        Cancelar
+        Cancelar nota
       </button>
     );
   }

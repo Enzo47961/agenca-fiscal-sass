@@ -546,6 +546,92 @@ dispare e-mail para um tomador real. **Não acrescentar essas duas ao escopo Pre
 
 ---
 
+## 6.2 O que foi entregue em 14–15/08/2026
+
+Fecha as sete lacunas listadas na auditoria de prontidão. Todas com DoD verde e
+verificação no banco, não só typecheck.
+
+| Entrega | Migrations | O ponto que decidiu o desenho |
+|---|---|---|
+| Convites + papéis com efeito | 20260814120000 | O papel passou a valer na POLICY, não no código |
+| Cancelamento de NFS-e | 140000, 150000 | Recusa devolve a nota a `emitida` — ela continua válida |
+| Importação em massa (CSV) | — | Não é tudo ou nada; relatório completo na primeira passada |
+| Painel de parceiro / relatórios | 170000 | `LEFT JOIN`: empresa sem nota PRECISA aparecer |
+| LGPD | 190000 | Anonimizar NÃO apaga nota fiscal |
+| Monitoramento | 200000 | Alerta por PROPORÇÃO de falha, não contagem |
+
+### As três decisões que mais importam
+
+**Papel vale no banco.** A prática de mercado é checar papel na aplicação. Aqui a
+regra está na policy do Postgres: um operador que contorne a tela — Server Action
+chamada direto, cliente HTTP próprio — continua barrado. Verificado com dois
+usuários e JWT: trocar regime devolve `UPDATE 0`; apagar cliente, `DELETE 0`.
+
+**Prazo de cancelamento não é validado, de propósito.** Ele é MUNICIPAL (DF até o
+dia 15 do mês seguinte, Recife 60 dias, Jundiaí veda após 180). O sistema tenta e
+reporta a resposta da prefeitura, com a mensagem original. Prazo chutado
+bloquearia cancelamento legítimo num município e daria falsa esperança em outro.
+
+**LGPD não apaga nota fiscal.** O titular tem direito à eliminação (art. 18, VI),
+e a nota tem de ser guardada (CTN art. 195). O art. 16, I da própria LGPD resolve:
+conserva-se para cumprir obrigação legal. Anonimiza o cadastro, preserva o
+documento. Apagar a nota para "atender à LGPD" criaria problema fiscal maior —
+e para o CONTRIBUINTE, não para nós.
+
+---
+
+## 6.3 O incidente de 15/08/2026 e o que ele mudou no processo
+
+**Sintoma:** `/dashboard/relatorios` em produção com *"server-side exception,
+Digest 1958706302"*.
+
+**Causa:** produção estava com 21 migrations; local com 27. As seis das últimas
+três entregas nunca foram aplicadas. O código foi ao ar dependendo de
+`relatorio_carteira()`, que não existia lá.
+
+**A causa não foi técnica, foi humana:** `db push` dependia de alguém lembrar, e
+a lembrança falhou depois de três entregas seguidas.
+
+### O que mudou
+
+1. **CI aplica migrations** (job `migrations` no `ci.yml`), só em push na `main` e
+   só depois do DoD passar. Deixou de depender de memória.
+2. **Branch + PR obrigatório** — o CI vira portão, não relatório póstumo.
+
+### Dois defeitos que o teste ponta a ponta revelou, e a leitura de código não
+
+- **Botão de cancelar invisível:** a condição da coluna de detalhe era
+  `status === "emitida" && (urlPdf || urlXml)`, e o botão morava dentro. Toda
+  nota sem anexo — ou seja, TODA nota do provider em simulação — ficava sem como
+  cancelar.
+- **Botão de cancelar parecia estático:** era cinza até o hover. Virou vermelho
+  delineado. Contorno e não preenchido de propósito: sólido teria o peso de
+  "Emitir nota" e convidaria clique distraído numa ação irreversível.
+
+### Erro de desenho meu, registrado para não repetir
+
+Pedi que o `SUPABASE_PROJECT_REF` fosse guardado como **secret**. Ele não é
+segredo — já é público em `NEXT_PUBLIC_SUPABASE_URL`, embutido no bundle do
+browser. Isso não protegia nada e criou um modo de falha que só apareceu no
+merge (`Invalid project ref format`). Virou constante no workflow.
+
+**Regra que fica:** secret é para o que precisa ser secreto. Dado público em
+secret é fricção com aparência de segurança.
+
+### Secrets realmente necessários no GitHub
+
+`SUPABASE_ACCESS_TOKEN` e `SUPABASE_DB_PASSWORD`. Só isso.
+
+### Ressalva aberta
+
+A Vercel deploya pelo gatilho de git dela, **em paralelo** ao job de migrations.
+Há uma janela de segundos em que o código novo pode estar no ar antes de a
+migration terminar. Fechar isso exigiria desligar a integração de git da Vercel e
+deployar do CI. **Enquanto não for feito: migration que remove ou renomeia coluna
+deve ser aplicada à mão, fora do horário de uso.**
+
+---
+
 ## 7. Armadilhas conhecidas (não repita)
 
 1. **`declaracaoDaNota` escrita dentro da função Inngest sem teste** foi reconhecida como
