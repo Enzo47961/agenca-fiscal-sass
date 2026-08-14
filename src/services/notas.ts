@@ -1,7 +1,7 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { inngest } from "@/inngest/client";
-import { EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
+import { EVENTO_CANCELAMENTO_SOLICITADO, EVENTO_EMISSAO_SOLICITADA } from "@/inngest/events";
 import { type Database } from "@/types/database";
 import { dataCivilBr } from "@/lib/data-br";
 import {
@@ -389,4 +389,57 @@ export async function reprocessarNota(
     name: EVENTO_EMISSAO_SOLICITADA,
     data: { notaId: params.notaId, empresaId: params.empresaId },
   });
+}
+
+// ---------------------------------------------------------------------------
+// CANCELAMENTO
+// ---------------------------------------------------------------------------
+
+/**
+ * Limites da justificativa. Vêm da API do provider fiscal (Focus NFe exige de
+ * 15 a 255 caracteres) e estão repetidos no CHECK da coluna e na função
+ * `solicitar_cancelamento()`. Repetição deliberada: a tela avisa antes de
+ * enviar, e o banco recusa quem chegar por outro caminho.
+ */
+export const JUSTIFICATIVA_MIN = 15;
+export const JUSTIFICATIVA_MAX = 255;
+
+export const solicitarCancelamentoSchema = z.object({
+  notaId: z.string().uuid(),
+  justificativa: z
+    .string()
+    .trim()
+    .min(JUSTIFICATIVA_MIN, `A justificativa precisa de ao menos ${JUSTIFICATIVA_MIN} caracteres.`)
+    .max(JUSTIFICATIVA_MAX, `A justificativa passa de ${JUSTIFICATIVA_MAX} caracteres.`),
+});
+
+export type SolicitarCancelamentoInput = z.infer<typeof solicitarCancelamentoSchema>;
+
+/**
+ * Pede o cancelamento e delega ao motor — nunca fala com a prefeitura aqui,
+ * pelo mesmo motivo da emissão (regra 5).
+ *
+ * O banco valida papel, estado e justificativa; se algo estiver errado, a
+ * função lança e nenhum evento é disparado. A ordem importa: só emitimos o
+ * evento DEPOIS de a nota estar em `cancelando`, senão o motor acordaria para
+ * uma nota que ainda está `emitida` e recusaria a si mesmo.
+ */
+export async function solicitarCancelamento(
+  db: SupabaseClient<Database>,
+  dados: SolicitarCancelamentoInput,
+): Promise<{ empresaId: string }> {
+  const { data, error } = await db.rpc("solicitar_cancelamento", {
+    p_nota_id: dados.notaId,
+    p_justificativa: dados.justificativa,
+  });
+  if (error) throw new Error(error.message);
+
+  const empresaId = (data as unknown as { empresa_id: string }).empresa_id;
+
+  await inngest.send({
+    name: EVENTO_CANCELAMENTO_SOLICITADO,
+    data: { notaId: dados.notaId, empresaId },
+  });
+
+  return { empresaId };
 }

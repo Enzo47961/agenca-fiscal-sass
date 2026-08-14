@@ -1,6 +1,6 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { type Database } from "@/types/database";
-import { type Centavos, type NotaStatus } from "@/types/domain";
+import { NOTA_STATUS, type Centavos, type NotaStatus } from "@/types/domain";
 
 /**
  * Consultas do dashboard como funções puras (regra 20).
@@ -58,7 +58,10 @@ export async function statusDasNotas(
   //
   // `head: true` + `count: "exact"` faz o Postgres contar e não devolver linha
   // nenhuma. O índice `idx_notas_empresa_status` cobre exatamente este par.
-  const STATUS: readonly NotaStatus[] = ["pendente", "reprocessando", "emitida", "falhou"];
+  // Deriva de NOTA_STATUS em vez de repetir a lista: quando o cancelamento
+  // acrescentou dois estados, a lista fixa aqui teria deixado de conta-los em
+  // silencio — o painel mostraria zero cancelada com notas canceladas no banco.
+  const STATUS: readonly NotaStatus[] = NOTA_STATUS;
 
   const [contagens, { data: faturadas }, { data: recentes }] = await Promise.all([
     Promise.all(
@@ -98,6 +101,8 @@ export async function statusDasNotas(
     reprocessando: 0,
     emitida: 0,
     falhou: 0,
+    cancelando: 0,
+    cancelada: 0,
   };
   STATUS.forEach((status, i) => {
     contagemPorStatus[status] = contagens[i]?.count ?? 0;

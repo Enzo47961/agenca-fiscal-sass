@@ -168,6 +168,22 @@ export interface CertificadoRegistrado {
   cnpjDoCertificado: string | null;
 }
 
+/** Limites da justificativa, transcritos da documentação da Focus NFe. */
+export const JUSTIFICATIVA_MIN = 15;
+export const JUSTIFICATIVA_MAX = 255;
+
+export interface CancelarNfseInput {
+  /** A mesma chave de idempotência da emissão. */
+  referenciaExterna: string;
+  /** Motivo, de 15 a 255 caracteres — exigência do provider. */
+  justificativa: string;
+}
+
+export interface CancelarNfseResult {
+  /** XML do cancelamento, quando o provider devolve. */
+  urlXmlCancelamento: string | null;
+}
+
 export interface FiscalProvider {
   readonly nome: string;
 
@@ -184,6 +200,23 @@ export interface FiscalProvider {
    * (ex.: timeout após o envio: a nota pode ter sido emitida).
    */
   consultarPorReferencia(referenciaExterna: string): Promise<EmitirNfseResult | null>;
+
+  /**
+   * Cancela a NFS-e junto à prefeitura.
+   *
+   * O PRAZO NÃO É NOSSO PARA VALIDAR. A pesquisa em fontes oficiais mostrou que
+   * ele é MUNICIPAL: Distrito Federal até o dia 15 do mês seguinte, Recife 60
+   * dias, Jundiaí veda após 180. Não há como o sistema conhecer a regra de todos
+   * os municípios, então ele não a adivinha — tenta, e a recusa da prefeitura é
+   * a resposta. Implementações devem propagar essa recusa como
+   * `FiscalErrorPermanent`, com a mensagem original: insistir contra prazo
+   * vencido só queima tentativa.
+   *
+   * Indisponibilidade da prefeitura continua sendo `FiscalErrorTransient` — e
+   * aqui isso pesa mais que na emissão, porque cancelamento tem prazo e falhar
+   * no último dia por instabilidade é o pior desfecho possível.
+   */
+  cancelar(input: CancelarNfseInput): Promise<CancelarNfseResult>;
 
   /**
    * Envia o certificado A1 da empresa ao provider, que passa a guardá-lo.

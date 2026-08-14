@@ -3,6 +3,8 @@ import {
   FiscalErrorPermanent,
   FiscalErrorTransient,
   type EmitirNfseInput,
+  type CancelarNfseInput,
+  type CancelarNfseResult,
   type EmitirNfseResult,
   type FiscalProvider,
 } from "../provider";
@@ -94,6 +96,8 @@ const nfseFocusSchema = z.object({
   url: z.string().nullish(),
   caminho_xml_nota_fiscal: z.string().nullish(),
   caminho_danfse: z.string().nullish(),
+  /** Devolvido no cancelamento bem-sucedido. */
+  caminho_xml_cancelamento: z.string().nullish(),
   /** Presente nos corpos de erro (400/401/404/422). */
   codigo: z.string().nullish(),
   mensagem: z.string().nullish(),
@@ -266,6 +270,60 @@ export class FocusNfeProvider implements FiscalProvider {
   }
 
   /**
+   * Cancela a NFS-e. `DELETE /v2/nfse/{referencia}` com a justificativa no corpo.
+   *
+   * A CHAMADA É SÍNCRONA no provider: ele fala com a prefeitura na hora e
+   * responde `cancelado` ou `erro_cancelamento` na mesma requisição. Quem torna
+   * o fluxo assíncrono é o motor Inngest, do nosso lado, para ter retry — e
+   * cancelamento tem prazo, então falhar por indisponibilidade sem insistir é
+   * caro.
+   *
+   * NÃO VALIDAMOS PRAZO AQUI. Ele é municipal (DF até o dia 15 do mês seguinte,
+   * Recife 60 dias, Jundiaí veda após 180) e não temos como conhecer a regra de
+   * cada município. A prefeitura responde, e a recusa vira erro PERMANENTE com
+   * a mensagem original — insistir contra prazo vencido só queima tentativa.
+   */
+  async cancelar(input: CancelarNfseInput): Promise<CancelarNfseResult> {
+    const resp = await this.requisitar(
+      "DELETE",
+      `/v2/nfse/${encodeURIComponent(input.referenciaExterna)}`,
+      { corpo: { justificativa: input.justificativa } },
+    );
+
+    if (resp.statusHttp >= 400) {
+      throw this.erroDeResposta(
+        resp.statusHttp,
+        resp.corpo,
+        `Focus NFe recusou o cancelamento da nota ${input.referenciaExterna}`,
+      );
+    }
+
+    // Prefeitura devolve erro em HTTP 200 (armadilha conhecida do CLAUDE.md):
+    // o status do CORPO é quem manda.
+    const status = resp.corpo.status;
+    if (status === "erro_cancelamento") {
+      throw new FiscalErrorPermanent(
+        mensagemDeErro(resp.corpo, "A prefeitura recusou o cancelamento."),
+        resp.corpo.codigo ?? "erro_cancelamento",
+        resp.corpo,
+      );
+    }
+    if (status !== "cancelado") {
+      // Estado inesperado: transiente de propósito. Pode ser processamento em
+      // curso, e tratar como permanente encerraria o cancelamento cedo demais.
+      throw new FiscalErrorTransient(
+        `Focus NFe devolveu status "${String(status)}" ao cancelar — ainda não confirmado.`,
+        String(status ?? "sem-status"),
+        resp.corpo,
+      );
+    }
+
+    return {
+      urlXmlCancelamento: urlAbsoluta(this.base, resp.corpo.caminho_xml_cancelamento ?? null),
+    };
+  }
+
+  /**
    * Cadastra ou atualiza a empresa na Focus, enviando o certificado A1.
    *
    * `POST /v2/empresas` cria; `PUT /v2/empresas/{id}` atualiza e TROCA o
@@ -432,7 +490,7 @@ export class FocusNfeProvider implements FiscalProvider {
   }
 
   private async requisitar(
-    metodo: "GET" | "POST",
+    metodo: "GET" | "POST" | "DELETE",
     caminho: string,
     opts?: { corpo?: unknown },
   ): Promise<{ statusHttp: number; corpo: NfseFocus }> {

@@ -5,6 +5,7 @@ import {
   CLIENTES_POR_PAGINA_MAX,
 } from "@/services/clientes";
 import { statusDasNotas } from "@/services/dashboard";
+import { NOTA_STATUS } from "@/types/domain";
 import { fakeSupabase, argsDe, type FakeCtx, type FakeResult } from "@/test-utils/fake-supabase";
 
 const EMPRESA = "11111111-1111-1111-1111-111111111111";
@@ -184,7 +185,14 @@ describe("statusDasNotas — contagem no banco", () => {
 
   it("conta no banco com head:true — sem trazer linha nenhuma", async () => {
     const { db, ctxs } = bancoDeNotas({
-      contagens: { pendente: 3, reprocessando: 1, emitida: 5000, falhou: 2 },
+      contagens: {
+        pendente: 3,
+        reprocessando: 1,
+        emitida: 5000,
+        falhou: 2,
+        cancelando: 0,
+        cancelada: 7,
+      },
     });
     const resumo = await statusDasNotas(db, { empresaId: EMPRESA });
 
@@ -193,11 +201,14 @@ describe("statusDasNotas — contagem no banco", () => {
       reprocessando: 1,
       emitida: 5000,
       falhou: 2,
+      cancelando: 0,
+      cancelada: 7,
     });
 
-    // O ponto do item A8: quatro consultas de contagem, todas sem corpo.
+    // O ponto do item A8: uma consulta de contagem por status, todas sem corpo.
+    // Passou de 4 para 6 com `cancelando` e `cancelada`.
     const contagens = ctxs.filter((c) => c.opcoesSelect?.head);
-    expect(contagens).toHaveLength(4);
+    expect(contagens).toHaveLength(NOTA_STATUS.length);
     for (const c of contagens) {
       expect(c.opcoesSelect).toMatchObject({ count: "exact", head: true });
     }
@@ -208,7 +219,14 @@ describe("statusDasNotas — contagem no banco", () => {
   // números errados sem nenhum sinal de erro.
   it("NENHUMA consulta baixa a tabela de notas sem limite", async () => {
     const { db, ctxs } = bancoDeNotas({
-      contagens: { pendente: 0, reprocessando: 0, emitida: 0, falhou: 0 },
+      contagens: {
+        pendente: 0,
+        reprocessando: 0,
+        emitida: 0,
+        falhou: 0,
+        cancelando: 0,
+        cancelada: 0,
+      },
     });
     await statusDasNotas(db, { empresaId: EMPRESA });
 
@@ -240,7 +258,14 @@ describe("statusDasNotas — contagem no banco", () => {
 
   it("a lista de recentes continua limitada a 20", async () => {
     const { db, ctxs } = bancoDeNotas({
-      contagens: { pendente: 0, reprocessando: 0, emitida: 0, falhou: 0 },
+      contagens: {
+        pendente: 0,
+        reprocessando: 0,
+        emitida: 0,
+        falhou: 0,
+        cancelando: 0,
+        cancelada: 0,
+      },
       recentes: 20,
     });
     await statusDasNotas(db, { empresaId: EMPRESA });
@@ -257,11 +282,8 @@ describe("statusDasNotas — contagem no banco", () => {
     });
     const resumo = await statusDasNotas(db, { empresaId: EMPRESA });
 
-    expect(resumo.contagemPorStatus).toEqual({
-      pendente: 0,
-      reprocessando: 0,
-      emitida: 0,
-      falhou: 0,
-    });
+    expect(resumo.contagemPorStatus).toEqual(
+      Object.fromEntries(NOTA_STATUS.map((s) => [s, 0])),
+    );
   });
 });

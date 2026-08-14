@@ -9,6 +9,10 @@ export const EVENTO_EMISSAO_SOLICITADA = "nfse/emissao.solicitada" as const;
 export const EVENTO_EMISSAO_CONCLUIDA = "nfse/emissao.concluida" as const;
 export const EVENTO_EMISSAO_FALHOU = "nfse/emissao.falhou" as const;
 
+export const EVENTO_CANCELAMENTO_SOLICITADO = "nfse/cancelamento.solicitado" as const;
+export const EVENTO_CANCELAMENTO_CONCLUIDO = "nfse/cancelamento.concluido" as const;
+export const EVENTO_CANCELAMENTO_RECUSADO = "nfse/cancelamento.recusado" as const;
+
 export const emissaoSolicitadaSchema = z.object({
   notaId: z.string().uuid(),
   empresaId: z.string().uuid(),
@@ -28,6 +32,31 @@ export const emissaoFalhouSchema = z.object({
   tentativas: z.number().int().min(1),
 });
 
+export const cancelamentoSolicitadoSchema = z.object({
+  notaId: z.string().uuid(),
+  empresaId: z.string().uuid(),
+});
+
+export const cancelamentoConcluidoSchema = z.object({
+  notaId: z.string().uuid(),
+  empresaId: z.string().uuid(),
+});
+
+/**
+ * Recusa do cancelamento. A nota VOLTA a `emitida` e continua valida — o evento
+ * carrega o motivo porque, quando ele e prazo vencido, e a unica explicacao que
+ * o usuario tem para o que fazer em seguida.
+ */
+export const cancelamentoRecusadoSchema = z.object({
+  notaId: z.string().uuid(),
+  empresaId: z.string().uuid(),
+  motivo: z.string(),
+});
+
+export type CancelamentoSolicitadoData = z.infer<typeof cancelamentoSolicitadoSchema>;
+export type CancelamentoConcluidoData = z.infer<typeof cancelamentoConcluidoSchema>;
+export type CancelamentoRecusadoData = z.infer<typeof cancelamentoRecusadoSchema>;
+
 export type EmissaoSolicitadaData = z.infer<typeof emissaoSolicitadaSchema>;
 export type EmissaoConcluidaData = z.infer<typeof emissaoConcluidaSchema>;
 export type EmissaoFalhouData = z.infer<typeof emissaoFalhouSchema>;
@@ -36,4 +65,7 @@ export type Events = {
   [EVENTO_EMISSAO_SOLICITADA]: { data: EmissaoSolicitadaData };
   [EVENTO_EMISSAO_CONCLUIDA]: { data: EmissaoConcluidaData };
   [EVENTO_EMISSAO_FALHOU]: { data: EmissaoFalhouData };
+  [EVENTO_CANCELAMENTO_SOLICITADO]: { data: CancelamentoSolicitadoData };
+  [EVENTO_CANCELAMENTO_CONCLUIDO]: { data: CancelamentoConcluidoData };
+  [EVENTO_CANCELAMENTO_RECUSADO]: { data: CancelamentoRecusadoData };
 };

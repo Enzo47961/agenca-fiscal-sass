@@ -1,6 +1,7 @@
 import {
   FiscalErrorTransient,
   type EmitirNfseInput,
+  type CancelarNfseResult,
   type EmitirNfseResult,
   type FiscalProvider,
 } from "../provider";
@@ -37,5 +38,15 @@ export class MockFiscalProvider implements FiscalProvider {
 
   async consultarPorReferencia(): Promise<EmitirNfseResult | null> {
     return null; // mock nunca tem emissão pendente do outro lado
+  }
+
+  /**
+   * Cancelamento simulado: sempre aceita. O mock existe para exercitar o FLUXO,
+   * e recusar aqui esconderia o caminho feliz de quem esta testando. Nao ha XML
+   * porque nao houve documento — o painel entao nao mostra link, que e o
+   * comportamento correto para nota sem validade juridica.
+   */
+  async cancelar(): Promise<CancelarNfseResult> {
+    return { urlXmlCancelamento: null };
   }
 }

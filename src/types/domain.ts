@@ -3,7 +3,16 @@
  * Se um enum mudar no banco (migration nova), atualizar aqui no mesmo PR.
  */
 
-export const NOTA_STATUS = ["pendente", "reprocessando", "emitida", "falhou"] as const;
+export const NOTA_STATUS = [
+  "pendente",
+  "reprocessando",
+  "emitida",
+  "falhou",
+  // Cancelamento (migrations 20260814140000/150000). `cancelada` é TERMINAL:
+  // nota cancelada na prefeitura não volta atrás.
+  "cancelando",
+  "cancelada",
+] as const;
 export type NotaStatus = (typeof NOTA_STATUS)[number];
 
 export const ASSINATURA_STATUS = ["trial", "ativa", "inadimplente", "cancelada"] as const;

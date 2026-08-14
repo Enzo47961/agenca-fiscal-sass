@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -645,6 +645,11 @@ export type Database = {
             | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
             | null
           aliquota_iss: number
+          cancelada_em: string | null
+          cancelamento_justificativa: string | null
+          cancelamento_recusa: string | null
+          cancelamento_solicitado_em: string | null
+          cancelamento_solicitado_por: string | null
           cbs_aliquota: number
           cbs_valor_centavos: number
           cliente_id: string
@@ -694,6 +699,7 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
+          url_xml_cancelamento: string | null
           valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
@@ -703,6 +709,11 @@ export type Database = {
             | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
             | null
           aliquota_iss?: number
+          cancelada_em?: string | null
+          cancelamento_justificativa?: string | null
+          cancelamento_recusa?: string | null
+          cancelamento_solicitado_em?: string | null
+          cancelamento_solicitado_por?: string | null
           cbs_aliquota?: number
           cbs_valor_centavos?: number
           cliente_id: string
@@ -752,6 +763,7 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
+          url_xml_cancelamento?: string | null
           valor_liquido_centavos?: number | null
           valor_servico_centavos: number
         }
@@ -761,6 +773,11 @@ export type Database = {
             | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
             | null
           aliquota_iss?: number
+          cancelada_em?: string | null
+          cancelamento_justificativa?: string | null
+          cancelamento_recusa?: string | null
+          cancelamento_solicitado_em?: string | null
+          cancelamento_solicitado_por?: string | null
           cbs_aliquota?: number
           cbs_valor_centavos?: number
           cliente_id?: string
@@ -810,6 +827,7 @@ export type Database = {
           updated_at?: string
           url_pdf?: string | null
           url_xml?: string | null
+          url_xml_cancelamento?: string | null
           valor_liquido_centavos?: number | null
           valor_servico_centavos?: number
         }
@@ -1116,22 +1134,23 @@ export type Database = {
           atualizado_em: string
           empresa_id: string
           nota_id: string
+          status: Database["public"]["Enums"]["nota_status"]
         }[]
       }
       revogar_convite: { Args: { p_convite_id: string }; Returns: undefined }
-      transicionar_status_nota: {
-        Args: {
-          p_erro_codigo?: string
-          p_erro_msg?: string
-          p_nota_id: string
-          p_novo_status: Database["public"]["Enums"]["nota_status"]
-        }
+      solicitar_cancelamento: {
+        Args: { p_justificativa: string; p_nota_id: string }
         Returns: {
           ajuste_base_centavos: number
           ajuste_base_tipo:
             | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
             | null
           aliquota_iss: number
+          cancelada_em: string | null
+          cancelamento_justificativa: string | null
+          cancelamento_recusa: string | null
+          cancelamento_solicitado_em: string | null
+          cancelamento_solicitado_por: string | null
           cbs_aliquota: number
           cbs_valor_centavos: number
           cliente_id: string
@@ -1181,6 +1200,85 @@ export type Database = {
           updated_at: string
           url_pdf: string | null
           url_xml: string | null
+          url_xml_cancelamento: string | null
+          valor_liquido_centavos: number | null
+          valor_servico_centavos: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "notas_fiscais"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      transicionar_status_nota: {
+        Args: {
+          p_erro_codigo?: string
+          p_erro_msg?: string
+          p_nota_id: string
+          p_novo_status: Database["public"]["Enums"]["nota_status"]
+        }
+        Returns: {
+          ajuste_base_centavos: number
+          ajuste_base_tipo:
+            | Database["public"]["Enums"]["tipo_ajuste_base_ibscbs"]
+            | null
+          aliquota_iss: number
+          cancelada_em: string | null
+          cancelamento_justificativa: string | null
+          cancelamento_recusa: string | null
+          cancelamento_solicitado_em: string | null
+          cancelamento_solicitado_por: string | null
+          cbs_aliquota: number
+          cbs_valor_centavos: number
+          cliente_id: string
+          codigo_nbs: string | null
+          codigo_servico: string
+          codigo_verificacao: string | null
+          cofins_centavos: number
+          competencia: string
+          created_at: string
+          desconto_incondicionado_centavos: number
+          descricao_servico: string
+          documentos_ajuste_base: Json
+          emitida_em: string | null
+          empresa_id: string
+          excedente: boolean
+          falha_definitiva_em: string | null
+          fatura_excedente_id: string | null
+          ibs_aliquota: number
+          ibs_valor_centavos: number
+          ibscbs_base_centavos: number | null
+          ibscbs_cclasstrib: string | null
+          ibscbs_cclasstrib_vale_nfse: boolean | null
+          ibscbs_ccredpres: string | null
+          ibscbs_cst: string | null
+          ibscbs_dif_perc_cbs: number | null
+          ibscbs_dif_perc_mun: number | null
+          ibscbs_dif_perc_uf: number | null
+          ibscbs_trib_reg_cclasstrib: string | null
+          ibscbs_trib_reg_cst: string | null
+          id: string
+          iss_retido: boolean
+          issqn_centavos: number
+          max_tentativas: number
+          numero_nfse: string | null
+          pis_centavos: number
+          provider_id: string | null
+          proxima_tentativa_em: string | null
+          referencia_externa: string
+          regime_confirmado_em: string | null
+          regime_confirmado_por: string | null
+          regime_ibscbs: string
+          split_retido_centavos: number | null
+          status: Database["public"]["Enums"]["nota_status"]
+          tentativas: number
+          ultimo_erro: string | null
+          ultimo_erro_codigo: string | null
+          updated_at: string
+          url_pdf: string | null
+          url_xml: string | null
+          url_xml_cancelamento: string | null
           valor_liquido_centavos: number | null
           valor_servico_centavos: number
         }
@@ -1195,7 +1293,13 @@ export type Database = {
     Enums: {
       assinatura_status: "trial" | "ativa" | "inadimplente" | "cancelada"
       membro_papel: "owner" | "admin" | "operador"
-      nota_status: "pendente" | "reprocessando" | "emitida" | "falhou"
+      nota_status:
+        | "pendente"
+        | "reprocessando"
+        | "emitida"
+        | "falhou"
+        | "cancelando"
+        | "cancelada"
       plano_tipo: "starter" | "pro" | "escala"
       regime_apuracao_ibscbs_sn:
         | "ambos_pelo_sn"
@@ -1340,7 +1444,14 @@ export const Constants = {
     Enums: {
       assinatura_status: ["trial", "ativa", "inadimplente", "cancelada"],
       membro_papel: ["owner", "admin", "operador"],
-      nota_status: ["pendente", "reprocessando", "emitida", "falhou"],
+      nota_status: [
+        "pendente",
+        "reprocessando",
+        "emitida",
+        "falhou",
+        "cancelando",
+        "cancelada",
+      ],
       plano_tipo: ["starter", "pro", "escala"],
       regime_apuracao_ibscbs_sn: [
         "ambos_pelo_sn",

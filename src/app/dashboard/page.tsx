@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   Clock,
   FileCode2,
@@ -22,6 +23,7 @@ import { publicEnv } from "@/lib/env";
 import { dataCivilBr } from "@/lib/data-br";
 import { listarMinhasEmpresas } from "./empresas/actions";
 import { ExportarXmls } from "./exportar-xmls";
+import { BotaoCancelar } from "./notas/cancelar";
 import { EmpresaAtiva, SeletorEmpresa } from "./empresas/seletor";
 
 export const dynamic = "force-dynamic"; // status de notas muda a cada retry
@@ -34,6 +36,11 @@ const STATUS_UI: Record<
   reprocessando: { rotulo: "Reprocessando", classes: "bg-amber-50 text-amber-700", Icone: RefreshCw },
   pendente: { rotulo: "Pendente", classes: "bg-slate-100 text-slate-600", Icone: Clock },
   falhou: { rotulo: "Falhou", classes: "bg-red-50 text-red-700", Icone: XCircle },
+  // Cancelamento em curso usa o mesmo amarelo de "reprocessando": os dois
+  // significam a mesma coisa para quem olha — o motor esta trabalhando.
+  cancelando: { rotulo: "Cancelando", classes: "bg-amber-50 text-amber-700", Icone: RefreshCw },
+  // Cinza, nao vermelho: cancelada nao e erro, e um desfecho pretendido.
+  cancelada: { rotulo: "Cancelada", classes: "bg-slate-200 text-slate-700", Icone: Ban },
 };
 
 export default async function DashboardPage() {
@@ -236,7 +243,17 @@ export default async function DashboardPage() {
                               XML
                             </a>
                           )}
+                          {/*
+                            Cancelar fica ao lado dos downloads porque e ali que
+                            o usuario chega quando percebe o erro — conferindo o
+                            PDF da nota que acabou de sair.
+                          */}
+                          {nota.numeroNfse && (
+                            <BotaoCancelar notaId={nota.id} numeroNfse={nota.numeroNfse} />
+                          )}
                         </span>
+                      ) : nota.status === "cancelada" ? (
+                        "Cancelada"
                       ) : nota.status === "reprocessando" && nota.proximaTentativaEm ? (
                         `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`
                       ) : nota.status === "falhou" ? (
