@@ -163,11 +163,15 @@ jobs:
 
     env:
       # NAO SAO SEGREDOS, e por isso estao em claro — mesma regra que trouxe o
-      # ref do Supabase para ca depois de ele quebrar o CI como secret vazio.
-      # Ambos aparecem na URL do painel da Vercel e nao dao acesso a nada
-      # sozinhos; quem autentica e o VERCEL_TOKEN.
-      VERCEL_ORG_ID: team_PP3utzdjswflF0T7F7dVjd7L
-      VERCEL_PROJECT_ID: prj_Mi2aR1aF5hCFHIkgYOipdbWe9RFE
+      # ref do Supabase para ca. Aparecem na URL do painel e nao dao acesso a
+      # nada sozinhos; quem autentica e o VERCEL_TOKEN.
+      #
+      # Sao o NOME do projeto e o SLUG do time, e nao os ids `prj_`/`team_`: a
+      # primeira tentativa usou os ids via VERCEL_ORG_ID/VERCEL_PROJECT_ID e o
+      # `vercel pull` respondeu "Could not retrieve Project Settings". Estes
+      # dois foram verificados funcionando nesta conta antes de entrar aqui.
+      VERCEL_PROJETO: agenca-fiscal-sass-qgva
+      VERCEL_ESCOPO: enzo47961s-projects
 
     steps:
       - uses: actions/checkout@v4
@@ -179,10 +183,17 @@ jobs:
       - name: Instalar Vercel CLI
         run: npm install --global vercel@latest
 
+      # `link` EXPLICITO antes do `pull`. A forma documentada — exportar
+      # VERCEL_ORG_ID e VERCEL_PROJECT_ID — falhou com "Could not retrieve
+      # Project Settings" na CLI 59. Nomear projeto e escopo resolve e e mais
+      # legivel: da para conferir a olho contra o painel.
+      - name: Vincular projeto
+        run: vercel link --yes --project "$VERCEL_PROJETO" --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
+
       # `pull` traz as variaveis de ambiente de PRODUCAO do projeto — as mesmas
       # que a Vercel usaria no deploy dela. Sem isso o build sairia sem elas.
       - name: Buscar configuracao de producao
-        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel pull --yes --environment=production --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
 
       # Build AQUI e deploy `--prebuilt`: assim o artefato publicado e
       # exatamente o que este job compilou, e nao um build refeito depois com
@@ -191,4 +202,4 @@ jobs:
         run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
 
       - name: Publicar
-        run: vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+        run: vercel deploy --prebuilt --prod --scope "$VERCEL_ESCOPO" --token="${{ secrets.VERCEL_TOKEN }}"
