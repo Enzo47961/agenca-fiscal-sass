@@ -262,6 +262,7 @@ export const emitirNfse = inngest.createFunction(
               nomeEmpresa: empresa.nome_fantasia ?? empresa.razao_social,
               numeroNfse: resultado.emissao.numeroNfse,
               urlPdf: resultado.emissao.urlPdf,
+              urlXml: resultado.emissao.urlXml,
             });
             const { emailId } = await enviarEmail({
               para: cliente.email,

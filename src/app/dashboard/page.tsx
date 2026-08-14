@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  FileCode2,
   FileDown,
   FilePlus2,
   MessageCircle,
@@ -186,16 +187,38 @@ export default async function DashboardPage() {
                     </td>
                     <td className="px-5 py-3 tabular-nums">{nota.numeroNfse ?? "—"}</td>
                     <td className="px-5 py-3 text-xs text-slate-500">
-                      {nota.status === "emitida" && nota.urlPdf ? (
-                        <a
-                          href={nota.urlPdf}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline"
-                        >
-                          <FileDown className="h-3.5 w-3.5" aria-hidden />
-                          Ver PDF
-                        </a>
+                      {/*
+                        PDF e XML. O XML já vinha do provider, era gravado e
+                        chegava até aqui em `nota.urlXml` — e simplesmente não
+                        era renderizado. Para o escritório de contabilidade ele
+                        é o documento que importa: é o XML que entra na
+                        escrituração; o PDF é a via de leitura do cliente.
+                      */}
+                      {nota.status === "emitida" && (nota.urlPdf || nota.urlXml) ? (
+                        <span className="inline-flex items-center gap-3">
+                          {nota.urlPdf && (
+                            <a
+                              href={nota.urlPdf}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline"
+                            >
+                              <FileDown className="h-3.5 w-3.5" aria-hidden />
+                              PDF
+                            </a>
+                          )}
+                          {nota.urlXml && (
+                            <a
+                              href={nota.urlXml}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline"
+                            >
+                              <FileCode2 className="h-3.5 w-3.5" aria-hidden />
+                              XML
+                            </a>
+                          )}
+                        </span>
                       ) : nota.status === "reprocessando" && nota.proximaTentativaEm ? (
                         `Tentativa ${nota.tentativas} — próxima: ${new Date(nota.proximaTentativaEm).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}`
                       ) : nota.status === "falhou" ? (

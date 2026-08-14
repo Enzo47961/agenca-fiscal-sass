@@ -2,6 +2,42 @@ import { describe, it, expect } from "vitest";
 import { emailNotaEmitida, escaparHtml, urlSegura } from "@/lib/email/resend";
 
 describe("emailNotaEmitida", () => {
+  // O XML ja vinha do provider e era gravado, mas o e-mail levava so o PDF.
+  // Para tomador PJ o XML e o que entra na escrituracao.
+  it("inclui o link do XML quando ele existe", () => {
+    const { html } = emailNotaEmitida({
+      nomeCliente: "Maria",
+      nomeEmpresa: "Silva",
+      numeroNfse: "1",
+      urlPdf: "https://exemplo.com/nota.pdf",
+      urlXml: "https://exemplo.com/nota.xml",
+    });
+    expect(html).toContain("https://exemplo.com/nota.xml");
+    expect(html).toMatch(/escritura/i);
+  });
+
+  it("omite o bloco do XML quando nao ha XML — provider mock, por exemplo", () => {
+    const { html } = emailNotaEmitida({
+      nomeCliente: "Maria",
+      nomeEmpresa: "Silva",
+      numeroNfse: "1",
+      urlPdf: "https://exemplo.com/nota.pdf",
+      urlXml: null,
+    });
+    expect(html).not.toMatch(/\.xml/i);
+  });
+
+  it("recusa XML com esquema perigoso, como faz com o PDF", () => {
+    const { html } = emailNotaEmitida({
+      nomeCliente: "Maria",
+      nomeEmpresa: "Silva",
+      numeroNfse: "1",
+      urlPdf: null,
+      urlXml: "javascript:alert(1)",
+    });
+    expect(html).not.toContain("javascript:");
+  });
+
   it("monta assunto e corpo com os dados da nota", () => {
     const { assunto, html } = emailNotaEmitida({
       nomeCliente: "Maria",

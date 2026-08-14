@@ -153,14 +153,32 @@ export function emailNotaEmitida(dados: {
   nomeEmpresa: string;
   numeroNfse: string;
   urlPdf: string | null;
+  /**
+   * XML da nota. O e-mail levava só o PDF, embora o XML já viesse do provider e
+   * estivesse gravado. Quem recebe serviço sendo PJ precisa do XML para a
+   * própria escrituração — e, com a Reforma, o crédito de IBS/CBS se apoia no
+   * documento, não no PDF. O PDF é para ler; o XML é o documento.
+   *
+   * Isto NÃO é cumprimento de obrigação legal: a pesquisa nas fontes oficiais
+   * não encontrou, para NFS-e, dever do prestador de enviar o XML ao tomador —
+   * o Ambiente de Dados Nacional já o disponibiliza às partes da nota. É
+   * conveniência, e está escrito aqui para ninguém depois transformar isso em
+   * "o sistema cumpre a obrigação de entrega".
+   */
+  urlXml?: string | null;
 }): { assunto: string; html: string } {
   const nomeCliente = escaparHtml(dados.nomeCliente);
   const nomeEmpresa = escaparHtml(dados.nomeEmpresa);
   const numeroNfse = escaparHtml(dados.numeroNfse);
   const href = urlSegura(dados.urlPdf);
+  const hrefXml = urlSegura(dados.urlXml);
 
   const botaoPdf = href
-    ? `<p style="margin:24px 0"><a href="${href}" style="background:#1570ef;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Baixar nota fiscal (PDF)</a></p>`
+    ? `<p style="margin:24px 0 8px"><a href="${href}" style="background:#1570ef;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Baixar nota fiscal (PDF)</a></p>`
+    : "";
+
+  const linkXml = hrefXml
+    ? `<p style="margin:${href ? "0 0 24px" : "24px 0"};font-size:13px"><a href="${hrefXml}" style="color:#1570ef">Baixar o arquivo XML</a> <span style="color:#64748b">— necessário para escrituração contábil.</span></p>`
     : "";
 
   return {
@@ -174,6 +192,7 @@ export function emailNotaEmitida(dados: {
   <p><strong>${nomeEmpresa}</strong> emitiu a nota fiscal de serviço
   <strong>nº ${numeroNfse}</strong> referente ao seu pagamento.</p>
   ${botaoPdf}
+  ${linkXml}
   <p style="color:#64748b;font-size:13px">Guarde este e-mail como comprovante.
   Em caso de dúvida, responda diretamente para ${nomeEmpresa}.</p>
   <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
