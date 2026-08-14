@@ -110,11 +110,23 @@ jobs:
         with:
           version: latest
 
+      # O REF DO PROJETO NAO E SEGREDO — e por isso esta aqui, em claro.
+      #
+      # Ele ja e publico: aparece em NEXT_PUBLIC_SUPABASE_URL, que por
+      # definicao vai embutido no bundle do navegador. Guardar em secret nao
+      # protegia nada e criou um modo de falha — o primeiro merge quebrou com
+      # "Invalid project ref format", porque o secret chegou vazio ou com a URL
+      # inteira colada no lugar do ref.
+      #
+      # Constante aqui: visivel, conferivel, e uma coisa a menos para
+      # configurar. Secret e para o que de fato precisa ser secreto — o token e
+      # a senha do banco, abaixo.
       - name: Aplicar migrations pendentes
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          supabase db push
+          supabase link --project-ref spxiaucinjsgbipaormf
+          # `--yes` porque nao ha ninguem para responder a confirmacao: sem
+          # TTY, o prompt do db push falha em vez de assumir sim.
+          supabase db push --yes
