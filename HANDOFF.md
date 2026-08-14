@@ -648,6 +648,47 @@ guardar dado público em secret já quebrou o CI uma vez.
 
 ---
 
+## 6.4 Pendência de segurança: Next 14 → 16 (adiada em 15/08/2026)
+
+**Decisão do usuário: fica para depois.** Registrada aqui porque é a única
+pendência técnica com data para vencer.
+
+### O que é
+
+`npm audit` acusa 10 vulnerabilidades. **Oito delas não alcançam produção** —
+são `vitest`, `esbuild`, `vite` e `eslint-config-next`, todas dependências de
+desenvolvimento. Inclusive a "crítica" (CVSS 9.8 do Vitest), que exige
+`vitest --ui` ligado, coisa que este projeto nunca roda.
+
+**A que importa é o `next`.** Estamos em 14.2.35; as correções estão em 15.5.21+.
+Entre os 21 avisos, quatro batem no que este sistema faz:
+
+| Vulnerabilidade | Por que importa aqui |
+|---|---|
+| SSRF em Server Actions | o sistema usa Server Actions em tudo |
+| Exposição não autenticada de endpoints de Server Function | app com login e dado fiscal |
+| Bypass de Middleware | há middleware de sessão |
+| Cache poisoning em respostas RSC | painel multi-tenant |
+
+### Por que foi adiado, e quando deixa de ser adiável
+
+Hoje o sistema **não tem cliente real e não emite nota com validade jurídica** —
+o provider está em simulação. O risco é teórico enquanto isso for verdade.
+
+**O gatilho é o lançamento.** No dia em que houver dado de contribuinte no ar,
+rodar um framework com SSRF conhecido em Server Actions deixa de ser dívida e
+vira exposição. Fazer na mesma janela da assinatura dos planos Pro, **antes de
+entrar cliente**.
+
+### Como fazer
+
+PR próprio, nunca emendado em outra entrega: é mudança de major num sistema que
+emite documento fiscal. Depois do merge, refazer o teste ponta a ponta no site —
+não basta o DoD verde, porque major de framework quebra em runtime, não em
+compilação.
+
+---
+
 ## 7. Armadilhas conhecidas (não repita)
 
 1. **`declaracaoDaNota` escrita dentro da função Inngest sem teste** foi reconhecida como
