@@ -45,7 +45,7 @@ export default async function RelatoriosPage({
   const t = totalizar(linhas);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8">
+    <main className="mx-auto max-w-screen-2xl px-4 py-8">
       <Link href="/dashboard" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:underline">
         <ArrowLeft className="h-4 w-4" aria-hidden />
         Voltar ao painel

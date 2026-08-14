@@ -64,7 +64,7 @@ export default async function DashboardPage() {
   )}`;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
+    <main className="mx-auto max-w-screen-2xl px-6 py-8">
       {/* Cabeçalho */}
       <header className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
@@ -82,7 +82,14 @@ export default async function DashboardPage() {
         {estado.totalEmpresas > 1 ? (
           <SeletorEmpresa empresas={carteira} empresaAtivaId={estado.empresaId} />
         ) : null}
-        <nav aria-label="Ações do painel" className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+        {/*
+            `flex-wrap` e nao `flex-nowrap + overflow-x-auto`: a combinacao
+            anterior EMPURRAVA os botoes para uma barra de rolagem interna
+            mesmo com espaco sobrando na tela — e barra de rolagem dentro de
+            um menu e algo que o usuario nao espera e nao encontra.
+            `justify-end` mantem o alinhamento a direita quando quebra.
+          */}
+          <nav aria-label="Ações do painel" className="flex flex-wrap items-center justify-end gap-2">
           <Link
             href="/dashboard/clientes"
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"

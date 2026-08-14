@@ -68,3 +68,53 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # APLICAR MIGRATIONS EM PRODUCAO
+  #
+  # POR QUE ESTE JOB EXISTE. Em 15/08/2026 a tela de relatorios quebrou em
+  # producao com "server-side exception": o codigo tinha ido ao ar dependendo de
+  # `relatorio_carteira()`, e o banco de producao estava seis migrations atras.
+  # A causa nao foi tecnica — foi humana: `db push` dependia de alguem lembrar.
+  #
+  # Automatizar tira isso da lembranca. O portao continua sendo o PR: migration
+  # so chega aqui depois de revisada e com o CI verde.
+  #
+  # SO EM PUSH NA MAIN, e depois do DoD passar. Em pull_request nao roda — PR
+  # nao pode alterar o banco de producao.
+  #
+  # RESSALVA HONESTA, e ela nao esta resolvida: a Vercel faz o deploy pelo
+  # proprio gatilho de git, em paralelo a este job. Existe uma janela de alguns
+  # segundos em que o codigo novo pode estar no ar antes de a migration
+  # terminar. Fechar isso exigiria desligar a integracao de git da Vercel e
+  # deployar daqui, o que e mudanca maior. Enquanto nao for feito, migration que
+  # remove ou renomeia coluna merece ser aplicada a mao, fora do horario de uso.
+  # ---------------------------------------------------------------------------
+  migrations:
+    name: Migrations em producao
+    needs: dod
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # `concurrency` proprio: duas execucoes aplicando migration ao mesmo tempo
+    # e o unico jeito de corromper o historico. Sem `cancel-in-progress` — um
+    # push novo NAO pode cancelar uma migration no meio.
+    concurrency:
+      group: migrations-producao
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Aplicar migrations pendentes
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          supabase db push
