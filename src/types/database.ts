@@ -253,6 +253,56 @@ export type Database = {
           },
         ]
       }
+      convites: {
+        Row: {
+          aceito_em: string | null
+          aceito_por: string | null
+          criado_em: string
+          criado_por: string
+          email: string
+          empresa_id: string
+          expira_em: string
+          id: string
+          papel: Database["public"]["Enums"]["membro_papel"]
+          revogado_em: string | null
+          token_hash: string
+        }
+        Insert: {
+          aceito_em?: string | null
+          aceito_por?: string | null
+          criado_em?: string
+          criado_por: string
+          email: string
+          empresa_id: string
+          expira_em: string
+          id?: string
+          papel: Database["public"]["Enums"]["membro_papel"]
+          revogado_em?: string | null
+          token_hash: string
+        }
+        Update: {
+          aceito_em?: string | null
+          aceito_por?: string | null
+          criado_em?: string
+          criado_por?: string
+          email?: string
+          empresa_id?: string
+          expira_em?: string
+          id?: string
+          papel?: Database["public"]["Enums"]["membro_papel"]
+          revogado_em?: string | null
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "convites_empresa_id_fkey"
+            columns: ["empresa_id"]
+            isOneToOne: false
+            referencedRelation: "empresas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cst_ibscbs: {
         Row: {
           ajuste_competencia: boolean
@@ -980,6 +1030,7 @@ export type Database = {
       }
     }
     Functions: {
+      aceitar_convite: { Args: { p_token_hash: string }; Returns: string }
       consumo_franquia_mes: {
         Args: { p_referencia?: string }
         Returns: {
@@ -999,6 +1050,34 @@ export type Database = {
           razao_social: string
         }[]
       }
+      criar_convite: {
+        Args: {
+          p_dias?: number
+          p_email: string
+          p_empresa_id: string
+          p_papel: Database["public"]["Enums"]["membro_papel"]
+          p_token_hash: string
+        }
+        Returns: {
+          aceito_em: string | null
+          aceito_por: string | null
+          criado_em: string
+          criado_por: string
+          email: string
+          empresa_id: string
+          expira_em: string
+          id: string
+          papel: Database["public"]["Enums"]["membro_papel"]
+          revogado_em: string | null
+          token_hash: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "convites"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       criar_minha_empresa: {
         Args: {
           p_cnpj: string
@@ -1012,7 +1091,15 @@ export type Database = {
         Returns: string
       }
       empresas_do_usuario: { Args: never; Returns: string[] }
+      empresas_do_usuario_no_papel: {
+        Args: { p_papeis: Database["public"]["Enums"]["membro_papel"][] }
+        Returns: string[]
+      }
       marcar_nota_excedente: { Args: { p_nota_id: string }; Returns: boolean }
+      meu_papel: {
+        Args: { p_empresa_id: string }
+        Returns: Database["public"]["Enums"]["membro_papel"]
+      }
       minhas_empresas: {
         Args: never
         Returns: {
@@ -1031,6 +1118,7 @@ export type Database = {
           nota_id: string
         }[]
       }
+      revogar_convite: { Args: { p_convite_id: string }; Returns: undefined }
       transicionar_status_nota: {
         Args: {
           p_erro_codigo?: string

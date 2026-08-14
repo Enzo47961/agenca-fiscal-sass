@@ -101,6 +101,47 @@ export function urlSegura(valor: string | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Convite para entrar numa empresa.
+ *
+ * O link carrega uma credencial, então o texto diz o prazo e o que fazer se o
+ * convite não era esperado — quem recebe convite que não pediu precisa saber
+ * que basta ignorar, e que o link morre sozinho.
+ */
+export function emailConvite(dados: {
+  nomeEmpresa: string;
+  papelLabel: string;
+  papelDescricao: string;
+  convidadoPor: string;
+  url: string;
+  dias: number;
+}): { assunto: string; html: string } {
+  const empresa = escaparHtml(dados.nomeEmpresa);
+  const href = urlSegura(dados.url);
+
+  return {
+    assunto: `Convite para acessar ${dados.nomeEmpresa} na Agência Fiscal`,
+    html: `
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#1e293b">
+  <h2 style="color:#1849a9">Você foi convidado</h2>
+  <p><strong>${escaparHtml(dados.convidadoPor)}</strong> convidou você a acessar
+  <strong>${empresa}</strong> na plataforma Agência Fiscal, como
+  <strong>${escaparHtml(dados.papelLabel)}</strong>.</p>
+  <p style="color:#475569;font-size:14px">${escaparHtml(dados.papelDescricao)}</p>
+  ${
+    href
+      ? `<p style="margin:24px 0"><a href="${href}" style="background:#1570ef;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Aceitar convite</a></p>`
+      : ""
+  }
+  <p style="color:#64748b;font-size:13px">O convite vale por ${dados.dias} dias e só funciona
+  para este endereço de e-mail. Se você não esperava este convite, ignore esta mensagem — o
+  link deixa de valer sozinho.</p>
+  <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+  <p style="color:#94a3b8;font-size:12px">Enviado automaticamente pela plataforma Agência Fiscal.</p>
+</div>`.trim(),
+  };
+}
+
+/**
  * Alerta interno de consumo da franquia do provider. Vai para NÓS, não para
  * cliente — por isso é seco e traz número, não tranquilização.
  */
