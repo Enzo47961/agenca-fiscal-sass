@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
+  BarChart3,
   CheckCircle2,
   Clock,
   FileCode2,
@@ -102,6 +103,13 @@ export default async function DashboardPage() {
           >
             <FilePlus2 className="h-4 w-4" aria-hidden />
             Emitir nota
+          </Link>
+          <Link
+            href="/dashboard/relatorios"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+          >
+            <BarChart3 className="h-4 w-4" aria-hidden />
+            Relatórios
           </Link>
           <Link
             href="/dashboard/empresas/importar"

@@ -1,4 +1,4 @@
-export type Json =
+﻿export type Json =
   | string
   | number
   | boolean
@@ -1135,6 +1135,22 @@ export type Database = {
           empresa_id: string
           nota_id: string
           status: Database["public"]["Enums"]["nota_status"]
+        }[]
+      }
+      relatorio_carteira: {
+        Args: { p_fim: string; p_inicio: string }
+        Returns: {
+          canceladas: number
+          cnpj: string
+          em_andamento: number
+          emitidas: number
+          empresa_id: string
+          falhadas: number
+          faturado_centavos: number
+          nome_fantasia: string
+          papel: Database["public"]["Enums"]["membro_papel"]
+          razao_social: string
+          ultima_emissao: string
         }[]
       }
       revogar_convite: { Args: { p_convite_id: string }; Returns: undefined }
