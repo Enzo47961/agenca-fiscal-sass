@@ -12,6 +12,7 @@ import {
   Receipt,
   RefreshCw,
   Settings,
+  Upload,
   Users,
   Wallet,
   XCircle,
@@ -101,6 +102,13 @@ export default async function DashboardPage() {
           >
             <FilePlus2 className="h-4 w-4" aria-hidden />
             Emitir nota
+          </Link>
+          <Link
+            href="/dashboard/empresas/importar"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+          >
+            <Upload className="h-4 w-4" aria-hidden />
+            Importar
           </Link>
           <Link
             href="/dashboard/equipe"
