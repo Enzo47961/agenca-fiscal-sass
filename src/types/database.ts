@@ -34,6 +34,54 @@ export type Database = {
   }
   public: {
     Tables: {
+      anonimizacoes: {
+        Row: {
+          cliente_id: string
+          criado_em: string
+          documento_hash: string
+          empresa_id: string
+          id: string
+          motivo: string
+          notas_preservadas: number
+          solicitado_por: string | null
+        }
+        Insert: {
+          cliente_id: string
+          criado_em?: string
+          documento_hash: string
+          empresa_id: string
+          id?: string
+          motivo: string
+          notas_preservadas?: number
+          solicitado_por?: string | null
+        }
+        Update: {
+          cliente_id?: string
+          criado_em?: string
+          documento_hash?: string
+          empresa_id?: string
+          id?: string
+          motivo?: string
+          notas_preservadas?: number
+          solicitado_por?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "anonimizacoes_cliente_id_fkey"
+            columns: ["cliente_id"]
+            isOneToOne: false
+            referencedRelation: "clientes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "anonimizacoes_empresa_id_fkey"
+            columns: ["empresa_id"]
+            isOneToOne: false
+            referencedRelation: "empresas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assinaturas: {
         Row: {
           cancelada_em: string | null
@@ -208,6 +256,7 @@ export type Database = {
       }
       clientes: {
         Row: {
+          anonimizado_em: string | null
           ativo: boolean
           cpf_cnpj: string
           created_at: string
@@ -220,6 +269,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          anonimizado_em?: string | null
           ativo?: boolean
           cpf_cnpj: string
           created_at?: string
@@ -232,6 +282,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          anonimizado_em?: string | null
           ativo?: boolean
           cpf_cnpj?: string
           created_at?: string
@@ -958,6 +1009,36 @@ export type Database = {
           },
         ]
       }
+      saude_alertas: {
+        Row: {
+          concluidas: number
+          criado_em: string
+          falhadas: number
+          id: number
+          motivos: string[]
+          nivel: string
+          presas: number
+        }
+        Insert: {
+          concluidas?: number
+          criado_em?: string
+          falhadas?: number
+          id?: number
+          motivos?: string[]
+          nivel: string
+          presas?: number
+        }
+        Update: {
+          concluidas?: number
+          criado_em?: string
+          falhadas?: number
+          id?: number
+          motivos?: string[]
+          nivel?: string
+          presas?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       cclasstrib_conferencia: {
@@ -1049,6 +1130,29 @@ export type Database = {
     }
     Functions: {
       aceitar_convite: { Args: { p_token_hash: string }; Returns: string }
+      anonimizar_titular: {
+        Args: {
+          p_cliente_id: string
+          p_documento_hash: string
+          p_motivo: string
+        }
+        Returns: {
+          cliente_id: string
+          criado_em: string
+          documento_hash: string
+          empresa_id: string
+          id: string
+          motivo: string
+          notas_preservadas: number
+          solicitado_por: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "anonimizacoes"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       consumo_franquia_mes: {
         Args: { p_referencia?: string }
         Returns: {
@@ -1113,6 +1217,7 @@ export type Database = {
         Args: { p_papeis: Database["public"]["Enums"]["membro_papel"][] }
         Returns: string[]
       }
+      exportar_dados_titular: { Args: { p_cliente_id: string }; Returns: Json }
       marcar_nota_excedente: { Args: { p_nota_id: string }; Returns: boolean }
       meu_papel: {
         Args: { p_empresa_id: string }

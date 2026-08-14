@@ -101,6 +101,37 @@ export function urlSegura(valor: string | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Alerta de saude operacional. Vai para NOS, e por isso e seco: numero primeiro,
+ * diagnostico depois. Alerta que enrola atrasa a leitura de quem foi acordado.
+ */
+export function emailSaude(dados: {
+  nivel: string;
+  motivos: string[];
+  falhadas: number;
+  concluidas: number;
+  presas: number;
+}): { assunto: string; html: string } {
+  const cor = dados.nivel === "critico" ? "#b42318" : dados.nivel === "atencao" ? "#b54708" : "#067647";
+  const itens = dados.motivos.map((m) => `<li>${escaparHtml(m)}</li>`).join("");
+
+  return {
+    assunto: `[Agência Fiscal] Saúde operacional: ${dados.nivel.toUpperCase()}`,
+    html: `
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;color:#1e293b">
+  <h2 style="color:${cor};margin-bottom:4px">Saúde operacional: ${escaparHtml(dados.nivel)}</h2>
+  <table style="border-collapse:collapse;margin:16px 0;font-size:14px">
+    <tr><td style="padding:4px 12px 4px 0">Notas falhadas (24h)</td><td><strong>${dados.falhadas}</strong> de ${dados.concluidas}</td></tr>
+    <tr><td style="padding:4px 12px 4px 0">Notas presas</td><td><strong>${dados.presas}</strong></td></tr>
+  </table>
+  ${itens ? `<ul style="font-size:14px;color:#334155">${itens}</ul>` : "<p>Voltou ao normal.</p>"}
+  <p style="color:#64748b;font-size:13px;margin-top:20px">
+    Este aviso só é enviado quando o nível MUDA — não se repete de hora em hora.
+  </p>
+</div>`.trim(),
+  };
+}
+
+/**
  * Convite para entrar numa empresa.
  *
  * O link carrega uma credencial, então o texto diz o prazo e o que fazer se o
