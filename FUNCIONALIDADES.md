@@ -25,40 +25,42 @@ Guardar isso resolve a leitura do resto.
 
 ## A resposta direta: quem faz login?
 
-**Só o escritório. Hoje o cliente final não tem como entrar no sistema — nem se você quiser.**
+**O escritório sempre. O cliente final, se for convidado.**
 
-O escritório cria uma conta, e a partir dela cadastra e opera **todos** os CNPJs da carteira.
-Um login, uma carteira, todas as empresas.
+O escritório cria uma conta e a partir dela cadastra e opera todos os CNPJs da carteira — um
+login, uma carteira, todas as empresas. Esse continua sendo o modo principal, e é o que o
+escritório quer: ninguém vai administrar 600 logins.
 
-### Por que "nem se você quiser"
+Desde 14/08/2026 existe também o **convite**: owner ou admin de uma empresa chama alguém por
+e-mail, escolhendo o nível de acesso. O convidado aceita e a empresa passa a aparecer no painel
+dele.
 
-Verifiquei no banco: **a única forma de alguém virar membro de uma empresa é criá-la.** A função
-`criar_minha_empresa()` insere o vínculo e sempre em nome de quem chamou. A tabela
-`empresa_membros` tem apenas policy de **SELECT** — nenhum caminho de INSERT existe para usuário
-logado, e não há tela, ação ou endpoint de convite em lugar nenhum do código.
+### Os três níveis, e o que cada um pode
 
-Consequência prática: quem criou a empresa é o único que a enxerga, para sempre.
+| Papel | Emite nota | Cadastra cliente | Altera dados fiscais | Apaga cliente | Convida |
+|---|:--:|:--:|:--:|:--:|:--:|
+| **Operador** | ✔ | ✔ | — | — | — |
+| **Administrador** | ✔ | ✔ | ✔ | ✔ | operador |
+| **Dono** | ✔ | ✔ | ✔ | ✔ | admin e operador |
 
-### Sobre os papéis (owner / admin / operador)
+O recorte do operador é o que torna seguro convidar o cliente final: ele emite em nome da
+empresa **sem poder trocar regime tributário, emissor ou certificado**.
 
-Eles **existem no banco** — o enum `membro_papel` está lá. Mas hoje o papel é apenas **exibido**
-no seletor de empresa, ao lado do CNPJ. Ele não autoriza nem impede nada: não há um único ponto
-do código que decida algo com base nele.
+### Isso vale no banco, não só na tela
 
-> ⚠️ **Correção importante ao `playbook_parcerias_faq.md`.** Aquele documento responde
-> *"Meu cliente pode ter acesso próprio?"* com *"Pode."* — **isso está errado** e não deve ser
-> dito em reunião. A infraestrutura existe no schema; a funcionalidade, não. Vou corrigir o
-> playbook se você quiser, mas o importante é você não prometer isso amanhã.
+A prática comum em SaaS é checar papel no código da aplicação. Aqui a regra vive na policy do
+Postgres: um operador que contornasse a tela — chamando a ação direto ou com um cliente HTTP
+próprio — continua barrado. Verificado com dois usuários reais: a tentativa de trocar o regime
+tributário devolve `UPDATE 0`, e a de apagar cliente, `DELETE 0`.
 
-### O que isso significa comercialmente
+### Como o convite se protege
 
-**A favor:** é exatamente o modelo que o escritório quer. Ele não vai administrar 600 logins, e
-o argumento de venda "uma conta, a carteira inteira, troca de empresa em um clique" é real e
-está funcionando.
-
-**Contra:** se algum escritório pedir que o cliente final emita sozinho, a resposta hoje é não.
-E se você quiser cobrar por acesso do cliente final no futuro, isso é desenvolvimento novo — não
-é configuração.
+- Token de 32 bytes aleatórios, **guardado com hash** — um vazamento do banco não entrega
+  convites pendentes.
+- **Preso ao e-mail convidado**: encaminhar o link não funciona.
+- Vale 7 dias e some sozinho.
+- Reconvidar revoga o anterior — nunca há dois links válidos para a mesma pessoa.
+- Token inválido e token já usado devolvem a **mesma** mensagem, para não revelar o que existe.
 
 ---
 
@@ -108,6 +110,12 @@ contabilidade e o erro só apareceria no fechamento.
 
 Teto de 500 notas por exportação, por tempo de resposta; acima disso a tela pede para estreitar
 o alcance.
+
+### Acesso — `/dashboard/equipe`
+
+Onde se convida alguém para a empresa ativa e se veem os convites pendentes, com prazo de
+validade e botão de revogar. Visível só para owner e admin — e, se um operador digitar a URL,
+a página vem vazia porque a policy não devolve linhas.
 
 ### Clientes — `/dashboard/clientes`
 
@@ -235,8 +243,6 @@ falha na primeira não abre a segunda.
 
 Dito aqui para você não descobrir numa reunião:
 
-- **Acesso do cliente final** — não há convite; só quem cria a empresa a enxerga.
-- **Papéis com efeito** — owner/admin/operador existem, mas não restringem nada.
 - **Painel de parceiro** — o escritório não vê relatório de comissão dentro do sistema.
 - **Emissão real** — depende do `FOCUSNFE_TOKEN`, que só faz sentido quando houver CNPJ e
   certificado. Até lá tudo opera em simulação, com faixa de aviso em todas as telas.

@@ -128,9 +128,19 @@ lembrar de marcar.
 
 ### "Meu cliente pode ter acesso próprio?"
 
-Pode. O modelo de papéis prevê dono, administrador e operador **por empresa**. Você pode
-dar ao cliente um acesso que emite mas não mexe em configuração fiscal, mantendo controle
-sobre o que importa.
+Pode, e o controle é fino. Você convida por e-mail e escolhe o nível:
+
+- **Operador** — emite nota e cadastra cliente. **Não** altera regime tributário, emissor nem
+  certificado, e não convida ninguém. É o acesso do cliente final.
+- **Administrador** — tudo isso, mais os dados fiscais, e pode convidar operadores.
+- **Dono** — controle total.
+
+Vale dizer o que sustenta isso, porque é onde muito sistema falha: a restrição não é da tela, é
+do **banco de dados**. Mesmo que alguém contorne a interface, o servidor recusa a operação. Você
+pode dar acesso ao cliente sem receio de ele mexer no que responde pelo CNPJ.
+
+O convite vale 7 dias, só funciona para o e-mail que o recebeu — encaminhar o link não dá acesso
+a ninguém — e você revoga quando quiser.
 
 ---
 
