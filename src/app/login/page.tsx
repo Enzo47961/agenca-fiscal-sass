@@ -68,7 +68,7 @@ export default function LoginPage() {
         </div>
         <div className="flex items-center gap-2 text-sm text-brand-50/80">
           <ShieldCheck className="h-4 w-4" aria-hidden />
-          Certificado A1 criptografado de ponta a ponta
+          Não guardamos cópia do seu certificado A1
         </div>
       </aside>
 

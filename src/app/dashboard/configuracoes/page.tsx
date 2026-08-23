@@ -45,12 +45,24 @@ export default async function ConfiguracoesPage() {
         </div>
       </header>
 
+      {/*
+        Este aviso JA DESCREVEU a arquitetura antiga — "criptografado (AES-256-GCM)
+        antes de ser armazenado". Isso deixou de ser verdade em 12/08/2026, quando o
+        .pfx passou a ser repassado ao provider em vez de guardado (ver
+        `enviarCertificadoA1` em services/empresas.ts). O texto sobreviveu à mudança e
+        contradizia o bloco do formulário, que estava certo.
+
+        A promessa nova é mais forte que a antiga, e é por isso que ela fica no topo:
+        "ciframos a nossa cópia" protege um risco que "não temos cópia" elimina. Para
+        quem entrega certificado de TERCEIROS — o escritório de contabilidade — essa
+        diferença é a decisão de compra.
+      */}
       <div className="mb-6 flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
         <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-green-600" aria-hidden />
         <p>
-          Seu certificado A1 é <strong>criptografado (AES-256-GCM) antes de ser armazenado</strong> e
-          nunca fica acessível em claro. Ele é usado exclusivamente para assinar as NFS-e junto à
-          prefeitura.
+          <strong>Não guardamos o seu certificado A1.</strong> Ele é enviado direto ao provedor
+          fiscal, que já precisa dele para assinar as NFS-e. Aqui ficam apenas a data de validade,
+          para avisar antes do vencimento, e o vínculo com o provedor — nem o arquivo, nem a senha.
         </p>
       </div>
 
