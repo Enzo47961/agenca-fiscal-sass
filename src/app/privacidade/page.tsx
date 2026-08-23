@@ -43,9 +43,15 @@ export default function PrivacidadePage() {
         <section>
           <h2 className="mb-2 font-semibold text-slate-900">3. Certificado digital A1</h2>
           <p>
-            Seu certificado e a senha são criptografados (AES-256-GCM) antes de serem armazenados e
-            nunca ficam acessíveis em texto claro. Eles são usados apenas no momento da assinatura
-            das notas fiscais.
+            <strong>Não armazenamos o seu certificado A1 nem a senha dele.</strong> Ao ser enviado,
+            o arquivo é repassado diretamente ao provedor fiscal responsável pela emissão, que já
+            precisa do certificado para assinar as notas em nome da sua empresa. O arquivo e a
+            senha existem apenas durante essa transmissão e não são gravados em nossos servidores.
+          </p>
+          <p className="mt-2">
+            De nosso lado ficam somente a <strong>data de validade</strong> do certificado, para
+            avisarmos antes do vencimento, e o identificador da sua empresa junto ao provedor, para
+            permitir a substituição do certificado depois. Nenhum dos dois é dado sigiloso.
           </p>
         </section>
 
