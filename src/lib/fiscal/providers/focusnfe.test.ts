@@ -4,6 +4,7 @@ import {
   FocusNfeProvider,
   aliquotaIssParaPercentual,
   centavosParaReais,
+  crtDaFocus,
   ehTransiente,
   mensagemDeErro,
   urlAbsoluta,
@@ -804,5 +805,153 @@ describe("documentos_referenciados (gReeRepRes) no payload", () => {
 
     const servico = (chamadas[0]!.corpo as Record<string, Record<string, unknown>>).servico!;
     expect(servico.documentos_referenciados).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cadastro de empresa no provider.
+//
+// Este bloco nasceu de um defeito real: ate 26/08/2026 `enviarCertificado` NAO
+// tinha teste nenhum, e por isso mandava `regime_tributario` como a string do
+// nosso dominio ("simples_nacional") onde a Focus documenta o CRT numerico.
+// Como o token nunca esteve em producao, o cadastro jamais foi exercido contra
+// a API real e a rejeicao nunca apareceu. O teste que faltava e o que trava a
+// volta do defeito.
+// ---------------------------------------------------------------------------
+
+const EMPRESA = {
+  cnpj: "12345678000199",
+  razaoSocial: "Empresa de Teste LTDA",
+  inscricaoMunicipal: "987654",
+  codigoMunicipioIbge: "3550308",
+  emailContato: "contato@exemplo.com.br",
+  regimeTributario: "simples_nacional",
+};
+
+const CERTIFICADO = { arquivo: Buffer.from("pfx-falso"), senha: "senha-do-pfx" };
+
+const EMPRESA_CRIADA = {
+  id: 4242,
+  certificado_valido_de: "2026-01-01",
+  certificado_valido_ate: "2027-01-01",
+  certificado_cnpj: "12345678000199",
+};
+
+describe("crtDaFocus", () => {
+  it("traduz o vocabulario do dominio para o CRT numerico do leiaute fiscal", () => {
+    expect(crtDaFocus("simples_nacional")).toBe(1);
+    expect(crtDaFocus("mei")).toBe(4);
+  });
+
+  it("lucro presumido e lucro real caem ambos em 3 — o CRT descreve a posicao perante o Simples", () => {
+    expect(crtDaFocus("lucro_presumido")).toBe(3);
+    expect(crtDaFocus("lucro_real")).toBe(3);
+  });
+
+  it("regime desconhecido falha FECHADO, e a mensagem nomeia o valor ofensor", () => {
+    // CRT errado distorce a tributacao de toda nota daquele CNPJ, e o erro so
+    // apareceria na escrituracao. Recusar aqui e ordens de grandeza mais barato.
+    expect(() => crtDaFocus("lucro_arbitrado")).toThrow(FiscalErrorPermanent);
+    expect(() => crtDaFocus("lucro_arbitrado")).toThrow(/lucro_arbitrado/);
+  });
+
+  it("nunca devolve o proprio texto recebido — o defeito de 26/08/2026 nao volta", () => {
+    const crt = crtDaFocus("simples_nacional");
+    expect(typeof crt).toBe("number");
+    expect(String(crt)).not.toBe("simples_nacional");
+  });
+});
+
+describe("FocusNfeProvider.enviarCertificado", () => {
+  it("cria a empresa com POST e devolve o id que permite trocar o certificado depois", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+
+    const r = await provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO });
+
+    expect(chamadas[0]!.metodo).toBe("POST");
+    expect(chamadas[0]!.url).toContain("/v2/empresas");
+    expect(r.providerEmpresaId).toBe("4242");
+    expect(r.validoAte).toBe("2027-01-01");
+  });
+
+  it("manda o CRT numerico, nao a string do dominio", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+    await provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO });
+
+    const corpo = chamadas[0]!.corpo as Record<string, unknown>;
+    expect(corpo.regime_tributario).toBe(1);
+    expect(corpo.regime_tributario).not.toBe("simples_nacional");
+  });
+
+  it("habilita NFS-e no cadastro — sem a flag a empresa entra cadastrada e inerte", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+    await provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO });
+
+    const corpo = chamadas[0]!.corpo as Record<string, unknown>;
+    expect(corpo.habilita_nfse).toBe(true);
+  });
+
+  it("com providerEmpresaId, ATUALIZA com PUT em vez de criar uma segunda empresa", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+    await provider.enviarCertificado!({
+      empresa: EMPRESA,
+      certificado: CERTIFICADO,
+      providerEmpresaId: "4242",
+    });
+
+    expect(chamadas[0]!.metodo).toBe("PUT");
+    expect(chamadas[0]!.url).toContain("/v2/empresas/4242");
+  });
+
+  it("regime desconhecido recusa ANTES de qualquer ida de rede", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+
+    await expect(
+      provider.enviarCertificado!({
+        empresa: { ...EMPRESA, regimeTributario: "regime_inventado" },
+        certificado: CERTIFICADO,
+      }),
+    ).rejects.toBeInstanceOf(FiscalErrorPermanent);
+
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("recusa da Focus por senha errada e PERMANENTE — repetir da o mesmo resultado", async () => {
+    const { provider } = criarProvider([
+      { status: 422, corpo: { mensagem: "senha do certificado incorreta" } },
+    ]);
+
+    await expect(
+      provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO }),
+    ).rejects.toBeInstanceOf(FiscalErrorPermanent);
+  });
+
+  it("indisponibilidade da Focus e TRANSIENTE — vale tentar de novo", async () => {
+    const { provider } = criarProvider([{ status: 503, corpo: { mensagem: "indisponivel" } }]);
+
+    await expect(
+      provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO }),
+    ).rejects.toBeInstanceOf(FiscalErrorTransient);
+  });
+
+  it("aceite sem id e PERMANENTE: sem ele nao da para trocar o certificado depois", async () => {
+    const { provider } = criarProvider([{ status: 200, corpo: { certificado_valido_ate: "2027-01-01" } }]);
+
+    await expect(
+      provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO }),
+    ).rejects.toBeInstanceOf(FiscalErrorPermanent);
+  });
+
+  it("a senha do certificado nunca sai na mensagem de erro", async () => {
+    const { provider } = criarProvider([
+      { status: 422, corpo: { mensagem: "certificado invalido" } },
+    ]);
+
+    try {
+      await provider.enviarCertificado!({ empresa: EMPRESA, certificado: CERTIFICADO });
+      expect.unreachable("deveria ter lancado");
+    } catch (e) {
+      expect(String((e as Error).message)).not.toContain(CERTIFICADO.senha);
+    }
   });
 });

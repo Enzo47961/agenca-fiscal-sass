@@ -182,6 +182,56 @@ export function ehTransiente(statusHttp: number): boolean {
   return statusHttp >= 500; // indisponibilidade da Focus/prefeitura
 }
 
+/**
+ * Traduz o regime tributário do NOSSO domínio para o CRT que a Focus espera.
+ *
+ * POR QUE ISTO EXISTE. O campo `regime_tributario` da API de empresas da Focus
+ * é o CRT (Código de Regime Tributário) do leiaute fiscal, e ele é NUMÉRICO:
+ *
+ *   1 = Simples Nacional
+ *   2 = Simples Nacional, excesso de sublimite de receita bruta
+ *   3 = Regime Normal
+ *   4 = MEI
+ *
+ * Do nosso lado, `empresas.regime_tributario` é TEXT e guarda vocabulário de
+ * negócio ("simples_nacional", "mei", "lucro_presumido", "lucro_real"). Até
+ * 26/08/2026 a string crua ia direto no payload. O defeito nunca apareceu
+ * porque o cadastro de empresa jamais foi exercido contra a API real — o token
+ * nunca esteve em produção — e não havia teste cobrindo `enviarCertificado`.
+ *
+ * LUCRO PRESUMIDO E LUCRO REAL CAEM AMBOS EM 3, e isso não é perda de
+ * informação: o CRT descreve a posição perante o SIMPLES, não a forma de
+ * apuração do IRPJ. Quem não é optante nem MEI está no regime normal.
+ *
+ * O 2 NÃO É EMITIDO POR NÓS. "Excesso de sublimite" é condição apurada durante
+ * o ano-calendário, não regime escolhido no cadastro, e o domínio não a
+ * representa. Se um dia representar, é aqui que entra.
+ *
+ * DESCONHECIDO FALHA FECHADO. Um valor novo na coluna — migration futura, dado
+ * importado torto — não pode virar cadastro com CRT errado: o CRT incorreto
+ * distorce a tributação de TODA nota emitida por aquele CNPJ, e o erro seria
+ * descoberto na escrituração, não aqui. Recusar e nomear o valor ofensor é mais
+ * barato que qualquer palpite.
+ */
+const CRT_DA_FOCUS: Readonly<Record<string, number>> = {
+  simples_nacional: 1,
+  mei: 4,
+  lucro_presumido: 3,
+  lucro_real: 3,
+};
+
+export function crtDaFocus(regimeTributario: string): number {
+  const crt = CRT_DA_FOCUS[regimeTributario];
+  if (crt === undefined) {
+    throw new FiscalErrorPermanent(
+      `Regime tributário "${regimeTributario}" não tem correspondente no CRT da ` +
+        `Focus NFe. Aceitos: ${Object.keys(CRT_DA_FOCUS).join(", ")}.`,
+      "regime_tributario_desconhecido",
+    );
+  }
+  return crt;
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -364,7 +414,12 @@ export class FocusNfeProvider implements FiscalProvider {
         inscricao_municipal: empresa.inscricaoMunicipal ?? undefined,
         codigo_municipio: empresa.codigoMunicipioIbge,
         email: empresa.emailContato,
-        regime_tributario: empresa.regimeTributario,
+        regime_tributario: crtDaFocus(empresa.regimeTributario),
+        // Sem esta flag a empresa fica CADASTRADA mas não HABILITADA para
+        // NFS-e, e a descoberta viria na primeira emissão — longe daqui e com
+        // a nota já criada. Nosso produto é NFS-e: toda empresa que
+        // cadastramos existe para isso, então não há caso em que seja false.
+        habilita_nfse: true,
         arquivo_certificado_base64: certificado.arquivo.toString("base64"),
         senha_certificado: certificado.senha,
       },
