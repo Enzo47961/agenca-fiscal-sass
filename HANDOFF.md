@@ -758,6 +758,55 @@ Isso dá custo mensurável à pergunta de qualificação *"em quantos município
 diferentes eles emitem?"*: emitir em 3 municípios é pesquisa de uma tarde;
 em 80, é projeto.
 
+### 27/08/2026 — o que a Focus respondeu sobre ESCALA (e o que ela nega)
+
+Cinco perguntas sobre automatizar o onboarding de centenas de CNPJs. **Quatro negativas.**
+
+| Pergunta | Resposta oficial |
+|---|---|
+| Integrar com cada prefeitura? | **Não.** A Focus mantém as integrações |
+| API que informe as exigências do município? | **Parcial.** Existe, mas *"não contempla todos os campos e todos os municípios"* |
+| A Focus deduz as regras no cadastro? | **Não.** *"É preciso o sistema de vocês identificar as exigências do município"* |
+| Consultar o que falta numa empresa? | **Não.** *"É preciso efetuar um teste de emissão e conferir o retorno da API"* |
+| Fluxo recomendado para escala? | **Não.** *"Infelizmente, não há"* |
+
+**A frase que define o trabalho que sobra:**
+
+> *"há particularidades em cada município, **até mesmo, em empresas do mesmo município**. É
+> preciso validar a emissão **em cada empresa**, de preferência, consultando o XML de uma nota
+> já emitida pela empresa."*
+
+#### ⚠️ Correção de uma afirmação minha
+
+Ao entregar o cadastro em lote (PR #14) escrevi que *"o gargalo dos 600 CNPJs deixou de
+existir"*. **Falso.** Sumiu o gargalo de **cadastro** — 600 empresas entram na Focus em ~10
+minutos. A **validação** continua, é por EMPRESA (não por município) e é maior que o problema
+resolvido. Não repetir essa afirmação.
+
+#### O que AINDA dá para automatizar
+
+Endpoints auxiliares que a documentação tem e que ninguém tinha mapeado:
+
+| Endpoint | Serve para |
+|---|---|
+| `GET /municipios/{ibge}/json` | JSON de exemplo da emissão **daquele município**. Revela o formato esperado e **se ele usa o padrão NFS-e Nacional ou o tradicional** — que é uma bifurcação real no nosso código |
+| `listar_codigos_tributarios_municipio` | Códigos tributários municipais. **Fecha a lacuna do `codigo_tributacao_municipal_iss`** registrada acima |
+| `listar_itens_lista_servico_municipio` | Itens da lista de serviço por município |
+
+**Atenção ao detalhe de rota:** o caminho documentado é `/municipios/{codigo}/json`, **sem o
+`/v2/`** que o resto da API usa. Conferir a base correta na implementação.
+
+**O que NÃO existe em endpoint nenhum:** se o município exige A1 ou login/senha, e o que falta
+na configuração de uma empresa específica.
+
+#### A resposta arquitetural
+
+A Focus recomenda "emitir um teste e ler o erro". Isso é um job, e a infraestrutura já existe
+(`provider_status`, fan-out, throttle do PR #14). Converter o conselho manual em processo
+automático é o que transforma 600 investigações em 600 tentativas mais N correções.
+
+---
+
 **Fontes:** [municípios integrados](https://focusnfe.com.br/guides/nfse/municipios-integrados/) ·
 [municípios da NFS-e Nacional](https://focusnfe.com.br/guides/nfse/municipios-integrados/municipios-da-nfse-nacional/) ·
 [criar empresa](https://doc.focusnfe.com.br/reference/criar_empresa.md)
