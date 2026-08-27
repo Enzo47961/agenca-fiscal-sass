@@ -14,7 +14,9 @@ export default async function ImportarPage() {
   if (estado.tipo === "deslogado") redirect("/login");
 
   // Prontidão da carteira. O alcance vem da RLS: só as empresas de quem olha.
-  const { data: carteira } = await db.from("empresas").select("provider_status");
+  const { data: carteira } = await db
+    .from("empresas")
+    .select("provider_status, inscricao_municipal");
   const contagem = {
     total: carteira?.length ?? 0,
     cadastradas: carteira?.filter((e) => e.provider_status === "cadastrada").length ?? 0,
@@ -22,6 +24,14 @@ export default async function ImportarPage() {
     falharam: carteira?.filter((e) => e.provider_status === "falhou").length ?? 0,
   };
   const pendentes = contagem.total - contagem.cadastradas;
+
+  // A Focus confirmou (27/08/2026) que a inscrição municipal é obrigatória no
+  // cadastro. Não barramos por isso — existe a exceção da NFS-e Nacional, em que
+  // a prefeitura não registrou a IM no ambiente nacional e o campo deve ser
+  // suprimido —, mas avisar antes evita gastar requisição para descobrir o
+  // óbvio, e evita que o usuário leia "recusado" sem entender por quê.
+  const semInscricao =
+    carteira?.filter((e) => e.provider_status !== "cadastrada" && !e.inscricao_municipal).length ?? 0;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -88,6 +98,19 @@ export default async function ImportarPage() {
             <Contador rotulo="Em andamento" valor={contagem.emAndamento} tom="neutro" />
             <Contador rotulo="Falharam" valor={contagem.falharam} tom={contagem.falharam > 0 ? "erro" : "neutro"} />
           </div>
+
+          {semInscricao > 0 && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              <strong>
+                {semInscricao} empresa{semInscricao === 1 ? "" : "s"} sem inscrição municipal.
+              </strong>{" "}
+              O provedor exige esse campo no cadastro, então{" "}
+              {semInscricao === 1 ? "ela provavelmente será recusada" : "elas provavelmente serão recusadas"}.
+              Vale preencher antes — a exceção é a NFS-e Nacional em municípios onde a própria
+              prefeitura não registrou a inscrição. Você pode preparar a carteira assim mesmo: o
+              motivo da recusa aparece aqui, empresa por empresa.
+            </p>
+          )}
 
           <div className="mt-4">
             <PrepararCarteira pendentes={pendentes} />

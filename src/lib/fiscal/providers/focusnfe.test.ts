@@ -973,6 +973,22 @@ describe("montarPayloadEmpresa", () => {
     expect(p.cnpj).toBe("12345678000199");
   });
 
+  it("DESLIGA o e-mail automatico do provedor — quem manda ao tomador somos nos", () => {
+    // A Focus confirmou que envia e-mail ao destinatario e que o leiaute dele
+    // nao pode ser alterado. Como ja entregamos a nota por conta propria, os
+    // dois ligados fariam o tomador receber a mesma nota duas vezes, uma delas
+    // com a marca do fornecedor.
+    const p = montarPayloadEmpresa(EMPRESA);
+    expect(p.enviar_email_destinatario).toBe(false);
+    expect(p.enviar_email_homologacao).toBe(false);
+  });
+
+  it("a intencao e EXPLICITA, nao herdada do default do provedor", () => {
+    const p = montarPayloadEmpresa(EMPRESA);
+    expect("enviar_email_destinatario" in p).toBe(true);
+    expect(p.enviar_email_destinatario).not.toBeUndefined();
+  });
+
   it("IM ausente vira undefined, nao null: nao apaga valor existente num PUT", () => {
     const p = montarPayloadEmpresa({ ...EMPRESA, inscricaoMunicipal: null });
     expect(p.inscricao_municipal).toBeUndefined();
