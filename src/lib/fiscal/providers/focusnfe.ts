@@ -5,6 +5,7 @@ import {
   type DadosCadastraisEmpresa,
   type EmitirNfseInput,
   type EmpresaNoProvider,
+  type MunicipioNfse,
   type CancelarNfseInput,
   type CancelarNfseResult,
   type EmitirNfseResult,
@@ -138,7 +139,47 @@ const empresaListadaSchema = z
 
 const listaEmpresasSchema = z.array(empresaListadaSchema);
 
+/**
+ * Município como a Focus o descreve. TUDO nullish menos a chave: o provedor só
+ * preenche o que conhece daquele município, e `null` ali significa "não sei",
+ * que é diferente de "não exige". Converter um no outro faria o sistema afirmar
+ * dispensa que ninguém verificou.
+ */
+const municipioFocusSchema = z
+  .object({
+    codigo_municipio: z.union([z.string(), z.number()]),
+    nome_municipio: z.string().nullish(),
+    sigla_uf: z.string().nullish(),
+    nfse_habilitada: z.boolean().nullish(),
+    possui_ambiente_homologacao_nfse: z.boolean().nullish(),
+    possui_cancelamento_nfse: z.boolean().nullish(),
+    requer_certificado_nfse: z.boolean().nullish(),
+    provedor_nfse: z.string().nullish(),
+    status_nfse: z.string().nullish(),
+    data_previsao_reimplementacao_nfse: z.string().nullish(),
+    ultima_emissao_nfse: z.string().nullish(),
+    endereco_obrigatorio_nfse: z.boolean().nullish(),
+    cpf_cnpj_obrigatorio_nfse: z.boolean().nullish(),
+    codigo_cnae_obrigatorio_nfse: z.boolean().nullish(),
+    item_lista_servico_obrigatorio_nfse: z.boolean().nullish(),
+    codigo_tributario_municipio_obrigatorio_nfse: z.boolean().nullish(),
+  })
+  .passthrough();
+
+const listaMunicipiosSchema = z.array(municipioFocusSchema);
+
 /** Status terminais/possíveis documentados pela Focus NFe. */
+/**
+ * A listagem de municípios aceita até 100 por página — o dobro da de empresas.
+ * O país tem ~5.570, então o mapa inteiro cabe em ~56 requisições.
+ *
+ * A rota de municípios NÃO leva o prefixo `/v2` que o resto da API usa. Está
+ * assim na documentação oficial, e é o tipo de detalhe que custaria uma sessão
+ * de depuração se fosse descoberto em produção.
+ */
+const PAGINA_MUNICIPIOS = 100;
+const MAX_PAGINAS_MUNICIPIOS = 120;
+
 /** A Focus devolve no máximo 50 empresas por página (documentação oficial). */
 const PAGINA_EMPRESAS = 50;
 /** 200 páginas = 10.000 empresas. Muito além da realidade; ver `listarEmpresas`. */
@@ -596,6 +637,31 @@ export class FocusNfeProvider implements FiscalProvider {
     );
   }
 
+  /**
+   * Baixa o mapa de municípios, paginando de 100 em 100. Ver o contrato em
+   * `FiscalProvider`.
+   *
+   * Mesmo teto de páginas da listagem de empresas, e pelo mesmo motivo: mapa
+   * truncado em silêncio é pior que falha, porque faria o onboarding concluir
+   * que municípios conhecidos são desconhecidos.
+   */
+  async listarMunicipios(): Promise<MunicipioNfse[]> {
+    const municipios: MunicipioNfse[] = [];
+    let offset = 0;
+
+    for (let pagina = 0; pagina < MAX_PAGINAS_MUNICIPIOS; pagina++) {
+      const lote = await this.listarPaginaDeMunicipios(offset);
+      municipios.push(...lote);
+      if (lote.length < PAGINA_MUNICIPIOS) return municipios;
+      offset += PAGINA_MUNICIPIOS;
+    }
+
+    throw new FiscalErrorPermanent(
+      `A listagem de municípios passou de ${MAX_PAGINAS_MUNICIPIOS} páginas sem terminar.`,
+      "paginacao_sem_fim",
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Internos
   // -------------------------------------------------------------------------
@@ -791,6 +857,76 @@ export class FocusNfeProvider implements FiscalProvider {
       corpo: parse.data,
       resetSegundos: segundosAteResetar(resposta),
     };
+  }
+
+  /** Uma página do mapa de municípios. */
+  private async listarPaginaDeMunicipios(offset: number): Promise<MunicipioNfse[]> {
+    const caminho = `/municipios?offset=${offset}&limit=${PAGINA_MUNICIPIOS}`;
+    let resposta: Response;
+    try {
+      resposta = await this.fetchImpl(`${this.base}${caminho}`, {
+        method: "GET",
+        headers: { Authorization: this.autorizacao },
+        signal: AbortSignal.timeout(this.timeoutMs),
+        cache: "no-store",
+      });
+    } catch (e) {
+      throw new FiscalErrorTransient(
+        `Falha de rede ao listar municípios na Focus NFe: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        "rede",
+        null,
+      );
+    }
+
+    if (resposta.status >= 400) {
+      const detalhe = `HTTP ${resposta.status}`;
+      if (ehTransiente(resposta.status)) {
+        throw new FiscalErrorTransient(
+          `Focus recusou a listagem de municípios: ${detalhe}`,
+          String(resposta.status),
+          { resetSegundos: segundosAteResetar(resposta) },
+        );
+      }
+      throw new FiscalErrorPermanent(
+        `Focus recusou a listagem de municípios: ${detalhe}`,
+        String(resposta.status),
+      );
+    }
+
+    const bruto: unknown = await resposta.json().catch(() => null);
+    const parse = listaMunicipiosSchema.safeParse(bruto);
+    if (!parse.success) {
+      throw new FiscalErrorTransient(
+        "Listagem de municípios da Focus NFe fora do formato esperado",
+        "contrato_invalido",
+        null,
+      );
+    }
+
+    // Município sem código IBGE de 7 dígitos não serve para casar com a nossa
+    // coluna e seria linha órfã no cache.
+    return parse.data
+      .map((m) => ({
+        codigoIbge: digitos(String(m.codigo_municipio)),
+        nome: m.nome_municipio ?? "",
+        uf: (m.sigla_uf ?? "").toUpperCase(),
+        nfseHabilitada: m.nfse_habilitada === true,
+        possuiHomologacao: m.possui_ambiente_homologacao_nfse ?? null,
+        possuiCancelamento: m.possui_cancelamento_nfse ?? null,
+        requerCertificado: m.requer_certificado_nfse ?? null,
+        provedor: m.provedor_nfse ?? null,
+        status: m.status_nfse ?? null,
+        previsaoReimplementacao: m.data_previsao_reimplementacao_nfse ?? null,
+        ultimaEmissao: m.ultima_emissao_nfse ?? null,
+        enderecoObrigatorio: m.endereco_obrigatorio_nfse ?? null,
+        cpfCnpjObrigatorio: m.cpf_cnpj_obrigatorio_nfse ?? null,
+        cnaeObrigatorio: m.codigo_cnae_obrigatorio_nfse ?? null,
+        itemListaServicoObrigatorio: m.item_lista_servico_obrigatorio_nfse ?? null,
+        codigoTributarioObrigatorio: m.codigo_tributario_municipio_obrigatorio_nfse ?? null,
+      }))
+      .filter((m) => m.codigoIbge.length === 7 && m.uf.length === 2);
   }
 
   /**

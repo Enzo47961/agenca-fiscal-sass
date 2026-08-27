@@ -5,6 +5,7 @@ import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { CABECALHO_MODELO, MAX_LINHAS_IMPORTACAO } from "@/services/importacao";
 import { FormularioImportacao } from "./formulario";
 import { PrepararCarteira } from "./preparar";
+import { resumirCarteira, validarContraMunicipio } from "@/services/validacao-municipal";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,9 @@ export default async function ImportarPage() {
   // Prontidão da carteira. O alcance vem da RLS: só as empresas de quem olha.
   const { data: carteira } = await db
     .from("empresas")
-    .select("provider_status, inscricao_municipal");
+    .select(
+      "cnpj, provider_status, inscricao_municipal, cnae, codigo_municipio_ibge, certificado_valido_ate",
+    );
   const contagem = {
     total: carteira?.length ?? 0,
     cadastradas: carteira?.filter((e) => e.provider_status === "cadastrada").length ?? 0,
@@ -32,6 +35,31 @@ export default async function ImportarPage() {
   // óbvio, e evita que o usuário leia "recusado" sem entender por quê.
   const semInscricao =
     carteira?.filter((e) => e.provider_status !== "cadastrada" && !e.inscricao_municipal).length ?? 0;
+
+  // VALIDAÇÃO LOCAL, custo zero. O mapa de municípios responde de graça o que,
+  // sem ele, custaria uma tentativa de emissão por empresa — quais municípios
+  // sequer emitem NFS-e, quais estão fora do ar, quais não têm homologação.
+  const ibges = Array.from(new Set((carteira ?? []).map((e) => e.codigo_municipio_ibge)));
+  const { data: municipios } = ibges.length
+    ? await db.from("municipios_nfse").select("*").in("codigo_ibge", ibges)
+    : { data: [] };
+  const porIbge = new Map((municipios ?? []).map((m) => [m.codigo_ibge, m]));
+
+  const validacao = resumirCarteira(
+    (carteira ?? []).map((e) =>
+      validarContraMunicipio(
+        {
+          cnpj: e.cnpj,
+          inscricaoMunicipal: e.inscricao_municipal,
+          cnae: e.cnae,
+          codigoMunicipioIbge: e.codigo_municipio_ibge,
+          certificadoValidoAte: e.certificado_valido_ate,
+        },
+        porIbge.get(e.codigo_municipio_ibge) ?? null,
+      ),
+    ),
+  );
+  const mapaVazio = (municipios ?? []).length === 0 && ibges.length > 0;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -111,6 +139,38 @@ export default async function ImportarPage() {
               motivo da recusa aparece aqui, empresa por empresa.
             </p>
           )}
+
+          <section className="mt-5">
+            <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Validação contra as regras de cada município
+            </h3>
+            {mapaVazio ? (
+              <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                O mapa de municípios ainda não foi sincronizado. Sem ele, a verificação prévia não
+                roda e cada empresa só descobre o que falta ao tentar emitir.
+              </p>
+            ) : (
+              <>
+                <div className="mt-2 grid grid-cols-2 gap-3 lg:grid-cols-5">
+                  <Contador rotulo="Prontas para teste" valor={validacao.prontoParaTeste} tom="ok" />
+                  <Contador rotulo="Falta dado" valor={validacao.incompleto} tom={validacao.incompleto > 0 ? "erro" : "neutro"} />
+                  <Contador rotulo="Sem homologação" valor={validacao.semAmbienteDeTeste} />
+                  <Contador rotulo="Município fora do ar" valor={validacao.indisponivel} />
+                  <Contador rotulo="Sem NFS-e no município" valor={validacao.impossivel} tom={validacao.impossivel > 0 ? "erro" : "neutro"} />
+                </div>
+                {/*
+                  O número que justifica a camada inteira: quantas tentativas de
+                  emissão a rodada vai realmente gastar, mostrado ANTES de gastar.
+                */}
+                <p className="mt-2 text-xs text-slate-500">
+                  Uma rodada de testes consumiria{" "}
+                  <strong className="text-slate-700">{validacao.creditosPrevistos}</strong> de{" "}
+                  {contagem.total} tentativas — as demais já foram resolvidas sem gastar
+                  requisição ao provedor.
+                </p>
+              </>
+            )}
+          </section>
 
           <div className="mt-4">
             <PrepararCarteira pendentes={pendentes} />

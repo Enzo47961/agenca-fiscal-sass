@@ -698,6 +698,66 @@ export type Database = {
           },
         ]
       }
+      municipios_nfse: {
+        Row: {
+          cnae_obrigatorio: boolean | null
+          codigo_ibge: string
+          codigo_tributario_obrigatorio: boolean | null
+          cpf_cnpj_obrigatorio: boolean | null
+          endereco_obrigatorio: boolean | null
+          item_lista_servico_obrigatorio: boolean | null
+          nfse_habilitada: boolean
+          nome: string
+          possui_cancelamento: boolean | null
+          possui_homologacao: boolean | null
+          previsao_reimplementacao: string | null
+          provedor: string | null
+          requer_certificado: boolean | null
+          sincronizado_em: string
+          status: string | null
+          uf: string
+          ultima_emissao: string | null
+        }
+        Insert: {
+          cnae_obrigatorio?: boolean | null
+          codigo_ibge: string
+          codigo_tributario_obrigatorio?: boolean | null
+          cpf_cnpj_obrigatorio?: boolean | null
+          endereco_obrigatorio?: boolean | null
+          item_lista_servico_obrigatorio?: boolean | null
+          nfse_habilitada?: boolean
+          nome: string
+          possui_cancelamento?: boolean | null
+          possui_homologacao?: boolean | null
+          previsao_reimplementacao?: string | null
+          provedor?: string | null
+          requer_certificado?: boolean | null
+          sincronizado_em?: string
+          status?: string | null
+          uf: string
+          ultima_emissao?: string | null
+        }
+        Update: {
+          cnae_obrigatorio?: boolean | null
+          codigo_ibge?: string
+          codigo_tributario_obrigatorio?: boolean | null
+          cpf_cnpj_obrigatorio?: boolean | null
+          endereco_obrigatorio?: boolean | null
+          item_lista_servico_obrigatorio?: boolean | null
+          nfse_habilitada?: boolean
+          nome?: string
+          possui_cancelamento?: boolean | null
+          possui_homologacao?: boolean | null
+          previsao_reimplementacao?: string | null
+          provedor?: string | null
+          requer_certificado?: boolean | null
+          sincronizado_em?: string
+          status?: string | null
+          uf?: string
+          ultima_emissao?: string | null
+        }
+        Relationships: []
+      }
       notas_fiscais: {
         Row: {
           ajuste_base_centavos: number

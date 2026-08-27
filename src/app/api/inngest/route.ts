@@ -9,6 +9,7 @@ import { cancelarNfse } from "@/inngest/functions/cancelar-nfse";
 import { vigiarSaude } from "@/inngest/functions/vigiar-saude";
 import { sincronizarCarteira } from "@/inngest/functions/sincronizar-carteira";
 import { cadastrarEmpresaProvider } from "@/inngest/functions/cadastrar-empresa";
+import { sincronizarMunicipios } from "@/inngest/functions/sincronizar-municipios";
 import { inngestEnv, verificarChavesInngest } from "@/lib/env";
 
 /**
@@ -58,6 +59,7 @@ function obterHandler() {
       vigiarSaude,
       sincronizarCarteira,
       cadastrarEmpresaProvider,
+      sincronizarMunicipios,
     ],
     // Explícito em vez de deixar o SDK ler do process.env: assim a origem da
     // chave é rastreável e passa pela validação do schema de ambiente (regra 4).
