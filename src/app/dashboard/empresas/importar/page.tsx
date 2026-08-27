@@ -4,6 +4,7 @@ import { ArrowLeft, Upload } from "lucide-react";
 import { createSessionClient, estadoDaSessao } from "@/lib/supabase/server";
 import { CABECALHO_MODELO, MAX_LINHAS_IMPORTACAO } from "@/services/importacao";
 import { FormularioImportacao } from "./formulario";
+import { PrepararCarteira } from "./preparar";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,16 @@ export default async function ImportarPage() {
   const db = createSessionClient();
   const estado = await estadoDaSessao(db);
   if (estado.tipo === "deslogado") redirect("/login");
+
+  // Prontidão da carteira. O alcance vem da RLS: só as empresas de quem olha.
+  const { data: carteira } = await db.from("empresas").select("provider_status");
+  const contagem = {
+    total: carteira?.length ?? 0,
+    cadastradas: carteira?.filter((e) => e.provider_status === "cadastrada").length ?? 0,
+    emAndamento: carteira?.filter((e) => e.provider_status === "cadastrando").length ?? 0,
+    falharam: carteira?.filter((e) => e.provider_status === "falhou").length ?? 0,
+  };
+  const pendentes = contagem.total - contagem.cadastradas;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -68,17 +79,55 @@ export default async function ImportarPage() {
         <FormularioImportacao />
       </section>
 
+      {contagem.total > 0 && (
+        <section className="mt-8">
+          <h2 className="text-sm font-medium text-slate-700">Prontidão da carteira</h2>
+          <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Contador rotulo="Empresas" valor={contagem.total} />
+            <Contador rotulo="No provedor" valor={contagem.cadastradas} tom="ok" />
+            <Contador rotulo="Em andamento" valor={contagem.emAndamento} tom="neutro" />
+            <Contador rotulo="Falharam" valor={contagem.falharam} tom={contagem.falharam > 0 ? "erro" : "neutro"} />
+          </div>
+
+          <div className="mt-4">
+            <PrepararCarteira pendentes={pendentes} />
+          </div>
+        </section>
+      )}
+
       {/*
-        Dito aqui e não descoberto depois: cada empresa importada nasce com o
-        emissor em simulação e sem certificado. A importação resolve o cadastro,
-        que é o gargalo dos 600 CNPJs — não a habilitação fiscal, que depende de
-        um certificado A1 por empresa.
+        Dito aqui e não descoberto depois: a importação e o cadastro no provedor
+        resolvem o gargalo dos 600 CNPJs. NÃO resolvem a habilitação fiscal, que
+        depende de um certificado A1 por empresa e do cliente final entregá-lo.
       */}
       <p className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-        <strong>Depois da importação:</strong> cada empresa entra com o emissor em modo simulação
-        e sem certificado digital. Para emitir nota com validade jurídica, é preciso enviar o
-        certificado A1 de cada uma, em Configurações.
+        <strong>O certificado continua sendo por empresa.</strong> Cadastrar a carteira no
+        provedor não habilita a emissão sozinho: cada CNPJ precisa do certificado digital A1 do
+        titular, enviado em Configurações. É a etapa que depende do cliente final, não de nós.
       </p>
     </main>
+  );
+}
+
+function Contador({
+  rotulo,
+  valor,
+  tom = "neutro",
+}: {
+  rotulo: string;
+  valor: number;
+  tom?: "neutro" | "ok" | "erro";
+}) {
+  const cores =
+    tom === "ok" && valor > 0
+      ? "border-green-200 bg-green-50 text-green-900"
+      : tom === "erro"
+        ? "border-red-200 bg-red-50 text-red-900"
+        : "border-slate-200 bg-white text-slate-900";
+  return (
+    <div className={`rounded-xl border p-3 ${cores}`}>
+      <p className="text-[11px] uppercase tracking-wide opacity-70">{rotulo}</p>
+      <p className="mt-0.5 text-xl font-semibold tabular-nums">{valor}</p>
+    </div>
   );
 }

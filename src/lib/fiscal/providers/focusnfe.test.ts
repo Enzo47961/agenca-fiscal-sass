@@ -6,6 +6,8 @@ import {
   centavosParaReais,
   crtDaFocus,
   ehTransiente,
+  montarPayloadEmpresa,
+  segundosAteResetar,
   mensagemDeErro,
   urlAbsoluta,
 } from "@/lib/fiscal/providers/focusnfe";
@@ -22,6 +24,8 @@ import {
 interface RespostaFalsa {
   status: number;
   corpo: unknown;
+  /** Para exercitar a leitura de Rate-Limit-Reset no 429. */
+  cabecalhos?: Record<string, string>;
 }
 
 interface ChamadaRegistrada {
@@ -46,6 +50,7 @@ function fetchFalso(respostas: RespostaFalsa[]) {
     return {
       status: proxima.status,
       json: async () => proxima.corpo,
+      headers: new Headers(proxima.cabecalhos ?? {}),
     } as Response;
   }) as unknown as typeof fetch;
   return { impl, chamadas };
@@ -953,5 +958,167 @@ describe("FocusNfeProvider.enviarCertificado", () => {
     } catch (e) {
       expect(String((e as Error).message)).not.toContain(CERTIFICADO.senha);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cadastro sem certificado e listagem — o que sustenta o cadastro em lote.
+// ---------------------------------------------------------------------------
+
+describe("montarPayloadEmpresa", () => {
+  it("traduz o regime e habilita NFS-e — a mesma regra dos dois caminhos", () => {
+    const p = montarPayloadEmpresa(EMPRESA);
+    expect(p.regime_tributario).toBe(1);
+    expect(p.habilita_nfse).toBe(true);
+    expect(p.cnpj).toBe("12345678000199");
+  });
+
+  it("IM ausente vira undefined, nao null: nao apaga valor existente num PUT", () => {
+    const p = montarPayloadEmpresa({ ...EMPRESA, inscricaoMunicipal: null });
+    expect(p.inscricao_municipal).toBeUndefined();
+    expect("inscricao_municipal" in p).toBe(true);
+  });
+});
+
+describe("segundosAteResetar", () => {
+  it("le o cabecalho de rate limit da Focus", () => {
+    const h = new Headers({ "Rate-Limit-Reset": "37" });
+    expect(segundosAteResetar({ headers: h })).toBe(37);
+  });
+
+  it("sem cabecalho, devolve null — quem chama cai no backoff padrao", () => {
+    expect(segundosAteResetar({})).toBeNull();
+    expect(segundosAteResetar({ headers: new Headers() })).toBeNull();
+  });
+
+  it("valor nao numerico nao vira espera maluca", () => {
+    expect(segundosAteResetar({ headers: new Headers({ "Rate-Limit-Reset": "logo" }) })).toBeNull();
+  });
+});
+
+describe("FocusNfeProvider.cadastrarEmpresa", () => {
+  it("cria a empresa SEM certificado — o que destrava o cadastro em lote", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+
+    const r = await provider.cadastrarEmpresa!({ empresa: EMPRESA });
+
+    expect(chamadas[0]!.metodo).toBe("POST");
+    expect(chamadas[0]!.url).toContain("/v2/empresas");
+    const corpo = chamadas[0]!.corpo as Record<string, unknown>;
+    expect(corpo.arquivo_certificado_base64).toBeUndefined();
+    expect(corpo.senha_certificado).toBeUndefined();
+    expect(r.providerEmpresaId).toBe("4242");
+  });
+
+  it("empresa SEM inscricao municipal e cadastrada assim mesmo (decisao de produto)", async () => {
+    // A IM e exigida na EMISSAO. Barrar aqui travaria a carteira inteira por um
+    // campo que o escritorio preenche depois.
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+
+    await provider.cadastrarEmpresa!({ empresa: { ...EMPRESA, inscricaoMunicipal: null } });
+
+    expect(chamadas).toHaveLength(1);
+    expect((chamadas[0]!.corpo as Record<string, unknown>).cnpj).toBe("12345678000199");
+  });
+
+  it("com id existente ATUALIZA por PUT, em vez de criar uma segunda", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: EMPRESA_CRIADA }]);
+    await provider.cadastrarEmpresa!({ empresa: EMPRESA, providerEmpresaId: "4242" });
+
+    expect(chamadas[0]!.metodo).toBe("PUT");
+    expect(chamadas[0]!.url).toContain("/v2/empresas/4242");
+  });
+
+  it("recusa de dado cadastral e PERMANENTE — repetir da o mesmo resultado", async () => {
+    const { provider } = criarProvider([
+      { status: 422, corpo: { mensagem: "municipio nao atendido" } },
+    ]);
+    await expect(provider.cadastrarEmpresa!({ empresa: EMPRESA })).rejects.toBeInstanceOf(
+      FiscalErrorPermanent,
+    );
+  });
+
+  it("429 e TRANSIENTE e carrega os segundos ate o reset", async () => {
+    const { provider } = criarProvider([
+      { status: 429, corpo: { mensagem: "rate limit" }, cabecalhos: { "Rate-Limit-Reset": "42" } },
+    ]);
+
+    try {
+      await provider.cadastrarEmpresa!({ empresa: EMPRESA });
+      expect.unreachable("deveria ter lancado");
+    } catch (e) {
+      expect(e).toBeInstanceOf(FiscalErrorTransient);
+      const bruto = (e as FiscalErrorTransient).payloadBruto as { resetSegundos: number | null };
+      expect(bruto.resetSegundos).toBe(42);
+    }
+  });
+
+  it("aceite sem id e PERMANENTE: sem ele nao da para enviar certificado depois", async () => {
+    const { provider } = criarProvider([{ status: 200, corpo: { nome: "x" } }]);
+    await expect(provider.cadastrarEmpresa!({ empresa: EMPRESA })).rejects.toBeInstanceOf(
+      FiscalErrorPermanent,
+    );
+  });
+});
+
+describe("FocusNfeProvider.listarEmpresas", () => {
+  const pagina = (n: number, inicio: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: 1000 + inicio + i,
+      cnpj: String(10000000000000 + inicio + i),
+    }));
+
+  it("uma pagina incompleta encerra a paginacao", async () => {
+    const { provider, chamadas } = criarProvider([{ status: 200, corpo: pagina(3, 0) }]);
+
+    const r = await provider.listarEmpresas!();
+
+    expect(r).toHaveLength(3);
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0]!.url).toContain("offset=0");
+    expect(r[0]).toEqual({ providerEmpresaId: "1000", cnpj: "10000000000000" });
+  });
+
+  it("pagina cheia faz avancar o offset de 50 em 50", async () => {
+    const { provider, chamadas } = criarProvider([
+      { status: 200, corpo: pagina(50, 0) },
+      { status: 200, corpo: pagina(7, 50) },
+    ]);
+
+    const r = await provider.listarEmpresas!();
+
+    expect(r).toHaveLength(57);
+    expect(chamadas).toHaveLength(2);
+    expect(chamadas[1]!.url).toContain("offset=50");
+  });
+
+  it("linha de pessoa fisica (sem CNPJ) e ignorada, nao derruba a pagina", async () => {
+    const { provider } = criarProvider([
+      { status: 200, corpo: [{ id: 1, cnpj: "11222333000181" }, { id: 2, cpf: "12345678901" }] },
+    ]);
+
+    const r = await provider.listarEmpresas!();
+    expect(r).toEqual([{ providerEmpresaId: "1", cnpj: "11222333000181" }]);
+  });
+
+  it("normaliza o CNPJ para digitos — e o que faz o casamento funcionar", async () => {
+    const { provider } = criarProvider([
+      { status: 200, corpo: [{ id: 9, cnpj: "11.222.333/0001-81" }] },
+    ]);
+
+    const r = await provider.listarEmpresas!();
+    expect(r[0]!.cnpj).toBe("11222333000181");
+  });
+
+  it("indisponibilidade e TRANSIENTE — a reconciliacao pode ser refeita", async () => {
+    const { provider } = criarProvider([{ status: 503, corpo: {} }]);
+    await expect(provider.listarEmpresas!()).rejects.toBeInstanceOf(FiscalErrorTransient);
+  });
+
+  it("resposta fora do contrato NAO vira lista vazia", async () => {
+    // Lista vazia por engano faria o plano concluir que nada existe la e
+    // recriar a carteira inteira. Falhar e a unica resposta segura.
+    const { provider } = criarProvider([{ status: 200, corpo: { empresas: "oops" } }]);
+    await expect(provider.listarEmpresas!()).rejects.toBeInstanceOf(FiscalErrorTransient);
   });
 });
