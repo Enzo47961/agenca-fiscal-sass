@@ -441,7 +441,10 @@ export type Database = {
           inscricao_municipal: string | null
           nome_fantasia: string | null
           provider_empresa_id: string | null
+          provider_erro: string | null
           provider_fiscal: string
+          provider_sincronizado_em: string | null
+          provider_status: Database["public"]["Enums"]["provider_status"]
           razao_social: string
           regime_apuracao_confirmado_em: string | null
           regime_apuracao_ibscbs_sn:
@@ -466,7 +469,10 @@ export type Database = {
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
           provider_empresa_id?: string | null
+          provider_erro?: string | null
           provider_fiscal?: string
+          provider_sincronizado_em?: string | null
+          provider_status?: Database["public"]["Enums"]["provider_status"]
           razao_social: string
           regime_apuracao_confirmado_em?: string | null
           regime_apuracao_ibscbs_sn?:
@@ -491,7 +497,10 @@ export type Database = {
           inscricao_municipal?: string | null
           nome_fantasia?: string | null
           provider_empresa_id?: string | null
+          provider_erro?: string | null
           provider_fiscal?: string
+          provider_sincronizado_em?: string | null
+          provider_status?: Database["public"]["Enums"]["provider_status"]
           razao_social?: string
           regime_apuracao_confirmado_em?: string | null
           regime_apuracao_ibscbs_sn?:
@@ -1422,6 +1431,7 @@ export type Database = {
         | "cancelando"
         | "cancelada"
       plano_tipo: "starter" | "pro" | "escala"
+      provider_status: "pendente" | "cadastrando" | "cadastrada" | "falhou"
       regime_apuracao_ibscbs_sn:
         | "ambos_pelo_sn"
         | "cbs_sn_ibs_regular"
@@ -1574,6 +1584,7 @@ export const Constants = {
         "cancelada",
       ],
       plano_tipo: ["starter", "pro", "escala"],
+      provider_status: ["pendente", "cadastrando", "cadastrada", "falhou"],
       regime_apuracao_ibscbs_sn: [
         "ambos_pelo_sn",
         "cbs_sn_ibs_regular",

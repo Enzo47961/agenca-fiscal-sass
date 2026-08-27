@@ -184,6 +184,25 @@ export interface CancelarNfseResult {
   urlXmlCancelamento: string | null;
 }
 
+/** Dados cadastrais da empresa, na linguagem do NOSSO domínio. */
+export interface DadosCadastraisEmpresa {
+  cnpj: string;
+  razaoSocial: string;
+  inscricaoMunicipal: string | null;
+  codigoMunicipioIbge: string;
+  emailContato: string;
+  regimeTributario: string;
+}
+
+/**
+ * Empresa como o provider a conhece. Só o necessário para reconciliar — o
+ * provider é a autoridade sobre o id, e o CNPJ é o que casa com o nosso lado.
+ */
+export interface EmpresaNoProvider {
+  providerEmpresaId: string;
+  cnpj: string;
+}
+
 export interface FiscalProvider {
   readonly nome: string;
 
@@ -238,16 +257,49 @@ export interface FiscalProvider {
    * implementa, e a tela mostra isso em vez de fingir que salvou.
    */
   enviarCertificado?(params: {
-    empresa: {
-      cnpj: string;
-      razaoSocial: string;
-      inscricaoMunicipal: string | null;
-      codigoMunicipioIbge: string;
-      emailContato: string;
-      regimeTributario: string;
-    };
+    empresa: DadosCadastraisEmpresa;
     certificado: CertificadoA1;
     /** Quando presente, ATUALIZA a empresa existente em vez de criar outra. */
     providerEmpresaId?: string | null;
   }): Promise<CertificadoRegistrado>;
+
+  /**
+   * Cadastra a empresa no provider SEM certificado.
+   *
+   * POR QUE ISTO EXISTE SEPARADO DE `enviarCertificado`. Até 26/08/2026 o
+   * cadastro no provider só acontecia como efeito colateral do envio do .pfx —
+   * o que fazia de uma carteira de 600 CNPJs 600 operações manuais, uma por
+   * tela. A documentação oficial da Focus mostra que o arquivo do certificado é
+   * OPCIONAL na criação da empresa, então as duas coisas podem ser separadas:
+   * o cadastro vira lote automatizado e sobra só a credencial, que depende do
+   * cliente final de qualquer forma.
+   *
+   * INSCRIÇÃO MUNICIPAL AUSENTE NÃO BLOQUEIA AQUI. Ela é obrigatória na
+   * EMISSÃO, não no cadastro, e barrar neste ponto travaria a carteira inteira
+   * por um campo que o escritório preenche depois. Falha aberta no cadastro,
+   * falha fechada na emissão.
+   *
+   * Idempotente por contrato: com `providerEmpresaId`, ATUALIZA em vez de criar
+   * uma segunda empresa para o mesmo CNPJ.
+   */
+  cadastrarEmpresa?(params: {
+    empresa: DadosCadastraisEmpresa;
+    providerEmpresaId?: string | null;
+  }): Promise<{ providerEmpresaId: string }>;
+
+  /**
+   * Lista as empresas que existem no provider, para reconciliação.
+   *
+   * POR QUE RECONCILIAR EM VEZ DE SÓ CRIAR. Se um POST de criação se perder na
+   * rede depois de processado, não há como saber se a empresa foi criada — e
+   * tentar de novo cria DUPLICATA no provider, que é irreversível do nosso
+   * lado. Listar antes resolve isso por construção, e ainda torna o job
+   * auto-curável: rodar de novo é seguro.
+   *
+   * É também ordens de grandeza mais barato. A Focus lista 50 por página, então
+   * conferir 600 empresas custa 12 requisições contra as 600 que um "cria e
+   * torce" gastaria — o que importa porque a API tem orçamento de 100
+   * requisições por minuto, compartilhado com a emissão do dia.
+   */
+  listarEmpresas?(): Promise<EmpresaNoProvider[]>;
 }

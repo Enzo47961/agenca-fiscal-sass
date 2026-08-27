@@ -2,7 +2,9 @@ import { z } from "zod";
 import {
   FiscalErrorPermanent,
   FiscalErrorTransient,
+  type DadosCadastraisEmpresa,
   type EmitirNfseInput,
+  type EmpresaNoProvider,
   type CancelarNfseInput,
   type CancelarNfseResult,
   type EmitirNfseResult,
@@ -122,7 +124,26 @@ const empresaFocusSchema = z
   })
   .passthrough();
 
+/**
+ * Empresa como vem na LISTAGEM. `cnpj` é nullish porque a Focus cadastra também
+ * pessoa física (campo `cpf`), e essas linhas simplesmente não interessam à
+ * reconciliação — filtramos em vez de rejeitar a página inteira.
+ */
+const empresaListadaSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]),
+    cnpj: z.string().nullish(),
+  })
+  .passthrough();
+
+const listaEmpresasSchema = z.array(empresaListadaSchema);
+
 /** Status terminais/possíveis documentados pela Focus NFe. */
+/** A Focus devolve no máximo 50 empresas por página (documentação oficial). */
+const PAGINA_EMPRESAS = 50;
+/** 200 páginas = 10.000 empresas. Muito além da realidade; ver `listarEmpresas`. */
+const MAX_PAGINAS_EMPRESAS = 200;
+
 const STATUS_AUTORIZADO = "autorizado";
 const STATUS_PROCESSANDO = "processando_autorizacao";
 const STATUS_ERRO = "erro_autorizacao";
@@ -230,6 +251,53 @@ export function crtDaFocus(regimeTributario: string): number {
     );
   }
   return crt;
+}
+
+/**
+ * Monta o corpo do cadastro de empresa. COMPARTILHADO de propósito entre criar
+ * com certificado e criar sem — os dois caminhos gravam a mesma empresa, e
+ * deixá-los montar o payload separadamente é como o defeito do CRT nasceria de
+ * novo, agora em dose dupla.
+ *
+ * `inscricao_municipal` vai como `undefined` quando ausente, e não como null:
+ * empresa sem IM ainda pode ser CADASTRADA (a IM é exigida na emissão), e
+ * mandar null explicitamente arriscaria sobrescrever com vazio um valor que já
+ * exista do outro lado num PUT.
+ */
+export function montarPayloadEmpresa(empresa: DadosCadastraisEmpresa): Record<string, unknown> {
+  return {
+    nome: empresa.razaoSocial,
+    cnpj: empresa.cnpj,
+    inscricao_municipal: empresa.inscricaoMunicipal ?? undefined,
+    codigo_municipio: empresa.codigoMunicipioIbge,
+    email: empresa.emailContato,
+    regime_tributario: crtDaFocus(empresa.regimeTributario),
+    // Sem esta flag a empresa fica CADASTRADA mas não HABILITADA para NFS-e, e
+    // a descoberta viria na primeira emissão — longe daqui e com a nota já
+    // criada. Nosso produto é NFS-e: toda empresa que cadastramos existe para
+    // isso, então não há caso em que seja false.
+    habilita_nfse: true,
+  };
+}
+
+/** Só os dígitos — a Focus ignora formatação, então normalizamos dos dois lados. */
+export function digitos(valor: string): string {
+  return valor.replace(/\D/g, "");
+}
+
+/**
+ * Segundos até o contador de créditos da Focus reiniciar.
+ *
+ * A API concede 100 créditos por minuto por token e devolve `Rate-Limit-Reset`
+ * junto do HTTP 429. Sem ler esse cabeçalho, o backoff padrão esperaria 5
+ * minutos onde a própria API está dizendo que 20 segundos bastam — e numa carga
+ * de centenas de empresas essa diferença é a distância entre minutos e horas.
+ */
+export function segundosAteResetar(resposta: { headers?: Headers }): number | null {
+  const bruto = resposta.headers?.get?.("Rate-Limit-Reset");
+  if (!bruto) return null;
+  const n = Number(bruto);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,17 +477,7 @@ export class FocusNfeProvider implements FiscalProvider {
       atualizando ? "PUT" : "POST",
       atualizando ? `/v2/empresas/${providerEmpresaId}` : "/v2/empresas",
       {
-        nome: empresa.razaoSocial,
-        cnpj: empresa.cnpj,
-        inscricao_municipal: empresa.inscricaoMunicipal ?? undefined,
-        codigo_municipio: empresa.codigoMunicipioIbge,
-        email: empresa.emailContato,
-        regime_tributario: crtDaFocus(empresa.regimeTributario),
-        // Sem esta flag a empresa fica CADASTRADA mas não HABILITADA para
-        // NFS-e, e a descoberta viria na primeira emissão — longe daqui e com
-        // a nota já criada. Nosso produto é NFS-e: toda empresa que
-        // cadastramos existe para isso, então não há caso em que seja false.
-        habilita_nfse: true,
+        ...montarPayloadEmpresa(empresa),
         arquivo_certificado_base64: certificado.arquivo.toString("base64"),
         senha_certificado: certificado.senha,
       },
@@ -447,6 +505,76 @@ export class FocusNfeProvider implements FiscalProvider {
       validoDe: resp.corpo.certificado_valido_de ?? null,
       cnpjDoCertificado: resp.corpo.certificado_cnpj ?? null,
     };
+  }
+
+  /**
+   * Cadastra a empresa SEM certificado. Ver o contrato em `FiscalProvider`.
+   *
+   * A recusa aqui é quase sempre dado cadastral — município não atendido, IM em
+   * formato inválido, CNPJ já existente. Todas permanentes: repetir com os
+   * mesmos dados dá o mesmo resultado, e queimar tentativa só atrasa a
+   * descoberta de que alguém precisa corrigir a planilha.
+   */
+  async cadastrarEmpresa(params: {
+    empresa: DadosCadastraisEmpresa;
+    providerEmpresaId?: string | null;
+  }): Promise<{ providerEmpresaId: string }> {
+    const atualizando = Boolean(params.providerEmpresaId);
+
+    const resp = await this.requisitarEmpresa(
+      atualizando ? "PUT" : "POST",
+      atualizando ? `/v2/empresas/${params.providerEmpresaId}` : "/v2/empresas",
+      montarPayloadEmpresa(params.empresa),
+    );
+
+    if (resp.statusHttp >= 400) {
+      const msg = resp.corpo.mensagem ?? resp.corpo.erro ?? "erro não detalhado";
+      throw ehTransiente(resp.statusHttp)
+        ? new FiscalErrorTransient(`Focus recusou o cadastro da empresa: ${msg}`, String(resp.statusHttp), {
+            resetSegundos: resp.resetSegundos,
+          })
+        : new FiscalErrorPermanent(
+            `Focus recusou o cadastro da empresa: ${msg}`,
+            String(resp.statusHttp),
+          );
+    }
+
+    if (!resp.corpo.id) {
+      throw new FiscalErrorPermanent(
+        "Focus aceitou o cadastro mas não devolveu o id da empresa — sem ele não " +
+          "dá para enviar o certificado nem atualizar os dados depois.",
+      );
+    }
+
+    return { providerEmpresaId: String(resp.corpo.id) };
+  }
+
+  /**
+   * Lista TODAS as empresas da conta, paginando de 50 em 50.
+   *
+   * O TETO DE PÁGINAS NÃO É DEFENSIVISMO VAZIO. Se a paginação nunca terminasse
+   * — mudança de contrato, resposta repetida —, o laço rodaria para sempre
+   * gastando créditos. E truncar em silêncio seria pior que falhar: um mapa
+   * incompleto faria o job concluir que empresas já cadastradas não existem, e
+   * criá-las de novo. Duplicata no provider é o dano que esta função existe
+   * para evitar, então ela prefere estourar a entregar meia verdade.
+   */
+  async listarEmpresas(): Promise<EmpresaNoProvider[]> {
+    const empresas: EmpresaNoProvider[] = [];
+    let offset = 0;
+
+    for (let pagina = 0; pagina < MAX_PAGINAS_EMPRESAS; pagina++) {
+      const lote = await this.listarPaginaDeEmpresas(offset);
+      empresas.push(...lote);
+      if (lote.length < PAGINA_EMPRESAS) return empresas;
+      offset += PAGINA_EMPRESAS;
+    }
+
+    throw new FiscalErrorPermanent(
+      `A listagem de empresas da Focus passou de ${MAX_PAGINAS_EMPRESAS} páginas sem ` +
+        "terminar. Reconciliar com mapa incompleto criaria empresas duplicadas.",
+      "paginacao_sem_fim",
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -601,7 +729,11 @@ export class FocusNfeProvider implements FiscalProvider {
     metodo: "POST" | "PUT",
     caminho: string,
     corpo: Record<string, unknown>,
-  ): Promise<{ statusHttp: number; corpo: z.infer<typeof empresaFocusSchema> }> {
+  ): Promise<{
+    statusHttp: number;
+    corpo: z.infer<typeof empresaFocusSchema>;
+    resetSegundos: number | null;
+  }> {
     let resposta: Response;
     try {
       resposta = await this.fetchImpl(`${this.base}${caminho}`, {
@@ -635,7 +767,64 @@ export class FocusNfeProvider implements FiscalProvider {
       );
     }
 
-    return { statusHttp: resposta.status, corpo: parse.data };
+    return {
+      statusHttp: resposta.status,
+      corpo: parse.data,
+      resetSegundos: segundosAteResetar(resposta),
+    };
+  }
+
+  /**
+   * Uma página da listagem de empresas. A Focus devolve até 50 por página e usa
+   * `offset` como deslocamento.
+   */
+  private async listarPaginaDeEmpresas(offset: number): Promise<EmpresaNoProvider[]> {
+    const caminho = `/v2/empresas?offset=${offset}`;
+    let resposta: Response;
+    try {
+      resposta = await this.fetchImpl(`${this.base}${caminho}`, {
+        method: "GET",
+        headers: { Authorization: this.autorizacao },
+        signal: AbortSignal.timeout(this.timeoutMs),
+        cache: "no-store",
+      });
+    } catch (e) {
+      throw new FiscalErrorTransient(
+        `Falha de rede ao listar empresas na Focus NFe: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        "rede",
+        null,
+      );
+    }
+
+    if (resposta.status >= 400) {
+      const detalhe = `HTTP ${resposta.status}`;
+      if (ehTransiente(resposta.status)) {
+        throw new FiscalErrorTransient(`Focus recusou a listagem de empresas: ${detalhe}`, String(resposta.status), {
+          resetSegundos: segundosAteResetar(resposta),
+        });
+      }
+      throw new FiscalErrorPermanent(
+        `Focus recusou a listagem de empresas: ${detalhe}`,
+        String(resposta.status),
+      );
+    }
+
+    const bruto: unknown = await resposta.json().catch(() => null);
+    const parse = listaEmpresasSchema.safeParse(bruto);
+    if (!parse.success) {
+      throw new FiscalErrorTransient(
+        "Listagem de empresas da Focus NFe fora do formato esperado",
+        "contrato_invalido",
+        null,
+      );
+    }
+
+    // Linhas de pessoa física (sem CNPJ) não participam da reconciliação.
+    return parse.data
+      .filter((e): e is typeof e & { cnpj: string } => typeof e.cnpj === "string" && e.cnpj.length > 0)
+      .map((e) => ({ providerEmpresaId: String(e.id), cnpj: digitos(e.cnpj) }));
   }
 
   /**
