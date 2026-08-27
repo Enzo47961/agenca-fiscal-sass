@@ -12,6 +12,7 @@ import {
 } from "@/lib/fiscal/reforma";
 import { declaracaoIbsCbsSchema, validarDeclaracao } from "@/lib/fiscal/ibscbs";
 import { documentosAjusteBaseSchema, somarAjusteBase } from "@/lib/fiscal/ajuste-base";
+import { avaliarProntidao } from "./prontidao";
 import {
   carregarAtributosCClassTrib,
   carregarCClassTribConhecidos,
@@ -145,6 +146,12 @@ export async function solicitarEmissao(
   input: SolicitarEmissaoInput,
 ): Promise<{ notaId: string }> {
   const dados = solicitarEmissaoSchema.parse(input);
+
+  // PRONTIDÃO ANTES DE TUDO. Se a empresa não pode emitir, nada mais nesta
+  // função importa — e descobrir isso aqui evita criar uma nota que já nasce
+  // condenada. Ver `avaliarProntidao` para o que é barrado e, principalmente,
+  // para o que NÃO é.
+  await exigirProntidao(db, dados.empresaId);
 
   // Grupo IBSCBS: validado AQUI, na criação, e não só na emissão.
   //
@@ -373,10 +380,49 @@ export async function solicitarEmissao(
  * Reprocessamento manual de nota falhada: falhou → pendente (zera ciclo)
  * e dispara novo evento para o motor.
  */
+/**
+ * Carrega a prontidão da empresa e recusa a operação quando ela não pode
+ * emitir. Erro comum (não `NonRetriableError`): quem chama é Server Action, e a
+ * mensagem chega ao formulário.
+ */
+async function exigirProntidao(
+  db: SupabaseClient<Database>,
+  empresaId: string,
+): Promise<void> {
+  const { data, error } = await db
+    .from("empresas")
+    .select("provider_fiscal, provider_status, provider_erro, certificado_valido_ate")
+    .eq("id", empresaId)
+    .single();
+
+  // Empresa inexistente ou fora do alcance da RLS: deixa seguir. Quem barra
+  // isso é a policy no insert, que é a camada certa — inventar uma mensagem
+  // aqui só revelaria a existência (ou não) de uma empresa alheia.
+  if (error || !data) return;
+
+  const bloqueio = avaliarProntidao(
+    {
+      providerFiscal: data.provider_fiscal,
+      providerStatus: data.provider_status,
+      providerErro: data.provider_erro,
+      certificadoValidoAte: data.certificado_valido_ate,
+    },
+    dataCivilBr(),
+  );
+
+  if (bloqueio) throw new Error(bloqueio.mensagem);
+}
+
 export async function reprocessarNota(
   db: SupabaseClient<Database>,
   params: { notaId: string; empresaId: string },
 ): Promise<void> {
+  // A mesma guarda da criação, e aqui ela vale ainda mais: a nota que se está
+  // reprocessando muitas vezes falhou JUSTAMENTE porque a empresa não estava
+  // pronta. Sem isto, o usuário corrige nada, clica de novo e recebe a mesma
+  // falha — agora sem entender por que insistir não resolveu.
+  await exigirProntidao(db, params.empresaId);
+
   const { error } = await db.rpc("transicionar_status_nota", {
     p_nota_id: params.notaId,
     p_novo_status: "pendente",
