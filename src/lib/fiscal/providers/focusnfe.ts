@@ -277,6 +277,25 @@ export function montarPayloadEmpresa(empresa: DadosCadastraisEmpresa): Record<st
     // criada. Nosso produto é NFS-e: toda empresa que cadastramos existe para
     // isso, então não há caso em que seja false.
     habilita_nfse: true,
+    // QUEM MANDA O E-MAIL AO TOMADOR SOMOS NÓS.
+    //
+    // O suporte da Focus confirmou em 27/08/2026 que eles enviam e-mail
+    // automático ao destinatário quando a nota traz endereço válido e a
+    // configuração está ligada no cadastro da empresa — e que o leiaute desse
+    // e-mail NÃO pode ser alterado.
+    //
+    // Nós já entregamos a nota ao tomador com número, PDF e XML (ver
+    // `emitir-nfse`). Deixar os dois ligados faria o cliente do escritório
+    // receber a MESMA nota duas vezes, uma delas com a marca do provedor — o
+    // que, para quem revende sob a própria marca, é vazamento de fornecedor na
+    // caixa de entrada do cliente dele.
+    //
+    // Explícito, e não confiando no default: o default é decisão do provedor e
+    // pode mudar sem aviso. Aqui a intenção fica declarada e testada.
+    enviar_email_destinatario: false,
+    // Em homologação o estrago seria pior: e-mail de teste chegando a tomador
+    // real, com nota sem validade jurídica.
+    enviar_email_homologacao: false,
   };
 }
 

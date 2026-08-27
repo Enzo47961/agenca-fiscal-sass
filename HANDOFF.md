@@ -689,6 +689,81 @@ compilação.
 
 ---
 
+## 6.5 Integração com a Focus: respostas oficiais e lacunas (26–27/08/2026)
+
+Perguntas que estavam abertas há semanas, respondidas pelo suporte e pela
+documentação. **Ficam aqui porque cada uma custou uma rodada de e-mail** — e
+porque três delas mudaram decisão de código.
+
+### Confirmado pelo suporte da Focus
+
+| Pergunta | Resposta |
+|---|---|
+| A franquia de 4.000 notas é por conta ou por CNPJ? | **Por conta** — soma todas as empresas |
+| Há limite de CNPJs no Growth? | **Não há** |
+| Recebimento de documento consome franquia? | **Sim.** Vira custo, não só risco |
+| O teste de 30 dias é por CNPJ? | **Não: por conta/cadastro principal.** Uma vez só |
+| Limite de requisições? | **100 créditos/min por token**, 1 por requisição. HTTP 429 + `Rate-Limit-Reset` |
+| Campos obrigatórios no cadastro? | **CNPJ + Inscrição Municipal**, mais habilitação da empresa junto à prefeitura para webservice |
+| Certificado A1 é sempre exigido? | **A maioria das prefeituras exige**, mas varia. Só a página do município diz |
+| E-mail automático ao tomador | Enviado quando há e-mail válido e a config está ligada no cadastro. **O leiaute NÃO pode ser alterado** |
+
+### O que isso mudou no código
+
+**`enviar_email_destinatario: false`** (e `enviar_email_homologacao`). Nós já
+enviamos a nota ao tomador com PDF e XML. Com os dois ligados, o cliente do
+escritório receberia a MESMA nota duas vezes, uma delas com a marca do
+provedor — vazamento de fornecedor na caixa de entrada de quem revende sob
+marca própria. Setado explicitamente, não herdado do default: default é decisão
+do provedor e muda sem aviso.
+
+**Aviso de inscrição municipal ausente** no painel de prontidão. Não barra, e
+não deve barrar: existe a exceção da NFS-e Nacional, em que a prefeitura não
+registrou a IM no ambiente nacional e o campo **deve ser suprimido**
+(`inscricao_municipal_prestador`). Como não dá para decidir localmente, a Focus
+continua sendo a autoridade — mas avisar antes evita gastar crédito para
+descobrir o óbvio.
+
+**`regime_tributario` como CRT numérico e `habilita_nfse`** — ver PR #13.
+
+### ⚫ Lacunas conhecidas, deliberadamente não implementadas
+
+**`certificado_especifico`.** O guia da NFS-e Nacional exige certificado
+*"específico da empresa emissora"* e diz que *"não é permitido utilizar apenas
+a raiz do certificado"*. Um escritório que tente usar o certificado da matriz
+para as filiais será recusado. **Não modelamos.** Só passa a importar quando
+aparecer um cliente com filiais — e aí o sintoma será recusa do provedor com
+mensagem clara, não erro silencioso.
+
+**`codigo_tributacao_municipal_iss`.** O mesmo guia avisa que *"alguns campos
+que são opcionais no schema nacional podem se tornar obrigatórios para aquele
+município específico"*, e usa justamente este como exemplo. **Não enviamos.**
+Implementar antes de saber quais municípios da carteira o exigem seria
+adivinhar; a informação está na página individual de cada município.
+
+**`codigo_nbs`.** O guia trata como *"essencial para o correto preenchimento"*.
+A decisão A7 (§6) manteve o campo **opcional para todos**, porque as fontes
+divergiam. Esta é uma fonte a mais do lado "exigir", mas é guia de fornecedor,
+não norma — **a decisão segue de pé e é do usuário.** Registrado para não se
+perder.
+
+### A consequência comercial que não é técnica
+
+A regra de autenticação — certificado, ou login e senha da prefeitura — **só
+existe na página individual de cada município**. A lista de municípios
+integrados tem apenas código IBGE, nome, estado e adesão ao ambiente nacional.
+
+Não há como saber de antemão, em lote, o que cada CNPJ da carteira vai exigir.
+Isso dá custo mensurável à pergunta de qualificação *"em quantos municípios
+diferentes eles emitem?"*: emitir em 3 municípios é pesquisa de uma tarde;
+em 80, é projeto.
+
+**Fontes:** [municípios integrados](https://focusnfe.com.br/guides/nfse/municipios-integrados/) ·
+[municípios da NFS-e Nacional](https://focusnfe.com.br/guides/nfse/municipios-integrados/municipios-da-nfse-nacional/) ·
+[criar empresa](https://doc.focusnfe.com.br/reference/criar_empresa.md)
+
+---
+
 ## 7. Armadilhas conhecidas (não repita)
 
 1. **`declaracaoDaNota` escrita dentro da função Inngest sem teste** foi reconhecida como
