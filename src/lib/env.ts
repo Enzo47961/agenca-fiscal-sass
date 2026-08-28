@@ -51,6 +51,18 @@ const serverEnvSchema = z.object({
    * (Painel API → Tokens), por empresa. NUNCA hardcode (regra 4).
    */
   FOCUSNFE_TOKEN: z.string().min(1).optional(),
+  /**
+   * Token do ambiente de HOMOLOGAÇÃO, separado do de produção.
+   *
+   * Não é redundância: a documentação da Focus diz que entre os ambientes
+   * "muda apenas a URL base do servidor e o token". Reusar o de produção
+   * apontando para a URL de teste simplesmente não autentica.
+   *
+   * Existe para o teste de emissão, que é como se descobre o que falta na
+   * configuração de uma empresa — o provedor não tem endpoint para isso.
+   * Opcional porque só é obtido depois de a empresa existir no painel deles.
+   */
+  FOCUSNFE_TOKEN_HOMOLOGACAO: z.string().min(1).optional(),
   /** Padrão homologação de propósito: produção exige escolha explícita. */
   FOCUSNFE_AMBIENTE: z.enum(["homologacao", "producao"]).default("homologacao"),
   /**
@@ -117,6 +129,22 @@ export function focusNfeEnv(): {
     );
   }
   return { token: env.FOCUSNFE_TOKEN, ambiente: env.FOCUSNFE_AMBIENTE };
+}
+
+/**
+ * Credencial do ambiente de homologação, para o teste de emissão.
+ *
+ * Devolve `null` em vez de lançar, e a diferença importa: a ausência aqui não é
+ * erro de configuração, é estado normal enquanto o CNPJ não existe. Quem chama
+ * mostra "indisponível" na tela, do mesmo jeito que `providersDisponiveis()`
+ * faz com o token de produção — em vez de quebrar uma tela inteira por uma
+ * funcionalidade que ainda não foi habilitada.
+ */
+export function focusNfeHomologacaoEnv(): { token: string } | null {
+  const env = serverEnv();
+  return env.FOCUSNFE_TOKEN_HOMOLOGACAO
+    ? { token: env.FOCUSNFE_TOKEN_HOMOLOGACAO }
+    : null;
 }
 
 /**

@@ -11,6 +11,7 @@ export const EVENTO_EMISSAO_FALHOU = "nfse/emissao.falhou" as const;
 
 export const EVENTO_SINCRONIZACAO_SOLICITADA = "empresa/sincronizacao.solicitada" as const;
 export const EVENTO_CADASTRO_EMPRESA_SOLICITADO = "empresa/cadastro.solicitado" as const;
+export const EVENTO_TESTE_EMISSAO_SOLICITADO = "empresa/teste-emissao.solicitado" as const;
 
 export const EVENTO_CANCELAMENTO_SOLICITADO = "nfse/cancelamento.solicitado" as const;
 export const EVENTO_CANCELAMENTO_CONCLUIDO = "nfse/cancelamento.concluido" as const;
@@ -51,6 +52,11 @@ export const cadastroEmpresaSolicitadoSchema = z.object({
   empresaId: z.string().uuid(),
 });
 
+/** Teste de emissao em homologacao, uma empresa por execucao. */
+export const testeEmissaoSolicitadoSchema = z.object({
+  empresaId: z.string().uuid(),
+});
+
 export const cancelamentoSolicitadoSchema = z.object({
   notaId: z.string().uuid(),
   empresaId: z.string().uuid(),
@@ -74,6 +80,7 @@ export const cancelamentoRecusadoSchema = z.object({
 
 export type SincronizacaoSolicitadaData = z.infer<typeof sincronizacaoSolicitadaSchema>;
 export type CadastroEmpresaSolicitadoData = z.infer<typeof cadastroEmpresaSolicitadoSchema>;
+export type TesteEmissaoSolicitadoData = z.infer<typeof testeEmissaoSolicitadoSchema>;
 
 export type CancelamentoSolicitadoData = z.infer<typeof cancelamentoSolicitadoSchema>;
 export type CancelamentoConcluidoData = z.infer<typeof cancelamentoConcluidoSchema>;
@@ -92,4 +99,5 @@ export type Events = {
   [EVENTO_CANCELAMENTO_RECUSADO]: { data: CancelamentoRecusadoData };
   [EVENTO_SINCRONIZACAO_SOLICITADA]: { data: SincronizacaoSolicitadaData };
   [EVENTO_CADASTRO_EMPRESA_SOLICITADO]: { data: CadastroEmpresaSolicitadoData };
+  [EVENTO_TESTE_EMISSAO_SOLICITADO]: { data: TesteEmissaoSolicitadoData };
 };

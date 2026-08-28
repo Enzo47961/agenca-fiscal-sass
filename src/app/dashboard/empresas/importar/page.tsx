@@ -18,7 +18,7 @@ export default async function ImportarPage() {
   const { data: carteira } = await db
     .from("empresas")
     .select(
-      "cnpj, provider_status, inscricao_municipal, cnae, codigo_municipio_ibge, certificado_valido_ate",
+      "cnpj, provider_status, inscricao_municipal, cnae, codigo_municipio_ibge, certificado_valido_ate, codigo_servico_teste, teste_emissao_ok",
     );
   const contagem = {
     total: carteira?.length ?? 0,
@@ -60,6 +60,12 @@ export default async function ImportarPage() {
     ),
   );
   const mapaVazio = (municipios ?? []).length === 0 && ibges.length > 0;
+
+  // O teste de emissão precisa do código de serviço da empresa. Ele NÃO é
+  // deduzido: um código errado seria recusado pela prefeitura e o resultado
+  // pareceria problema de configuração, que é o que o teste apura.
+  const semCodigoServico = (carteira ?? []).filter((e) => !e.codigo_servico_teste).length;
+  const aprovadas = (carteira ?? []).filter((e) => e.teste_emissao_ok === true).length;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -167,7 +173,27 @@ export default async function ImportarPage() {
                   <strong className="text-slate-700">{validacao.creditosPrevistos}</strong> de{" "}
                   {contagem.total} tentativas — as demais já foram resolvidas sem gastar
                   requisição ao provedor.
+                  {aprovadas > 0 && (
+                    <>
+                      {" "}
+                      <strong className="text-green-700">{aprovadas}</strong>{" "}
+                      {aprovadas === 1 ? "empresa já emitiu" : "empresas já emitiram"} em
+                      homologação.
+                    </>
+                  )}
                 </p>
+                {semCodigoServico > 0 && (
+                  <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                    <strong>
+                      {semCodigoServico} empresa{semCodigoServico === 1 ? "" : "s"} sem código de
+                      serviço para teste.
+                    </strong>{" "}
+                    O teste de emissão precisa saber o que a empresa presta (código da LC 116).
+                    Ele não é deduzido de propósito: um código chutado seria recusado pela
+                    prefeitura, e a recusa pareceria problema de configuração — que é exatamente o
+                    que o teste existe para apurar.
+                  </p>
+                )}
               </>
             )}
           </section>

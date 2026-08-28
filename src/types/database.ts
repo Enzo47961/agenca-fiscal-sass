@@ -434,6 +434,7 @@ export type Database = {
           cnae: string | null
           cnpj: string
           codigo_municipio_ibge: string
+          codigo_servico_teste: string | null
           created_at: string
           data_opcao_regime_regular: string | null
           email_contato: string
@@ -452,6 +453,9 @@ export type Database = {
             | null
           regime_tributario: string
           situacao_simples_nacional: Database["public"]["Enums"]["situacao_simples_nacional"]
+          teste_emissao_em: string | null
+          teste_emissao_erro: string | null
+          teste_emissao_ok: boolean | null
           updated_at: string
         }
         Insert: {
@@ -462,6 +466,7 @@ export type Database = {
           cnae?: string | null
           cnpj: string
           codigo_municipio_ibge: string
+          codigo_servico_teste?: string | null
           created_at?: string
           data_opcao_regime_regular?: string | null
           email_contato: string
@@ -480,6 +485,9 @@ export type Database = {
             | null
           regime_tributario?: string
           situacao_simples_nacional?: Database["public"]["Enums"]["situacao_simples_nacional"]
+          teste_emissao_em?: string | null
+          teste_emissao_erro?: string | null
+          teste_emissao_ok?: boolean | null
           updated_at?: string
         }
         Update: {
@@ -490,6 +498,7 @@ export type Database = {
           cnae?: string | null
           cnpj?: string
           codigo_municipio_ibge?: string
+          codigo_servico_teste?: string | null
           created_at?: string
           data_opcao_regime_regular?: string | null
           email_contato?: string
@@ -508,6 +517,9 @@ export type Database = {
             | null
           regime_tributario?: string
           situacao_simples_nacional?: Database["public"]["Enums"]["situacao_simples_nacional"]
+          teste_emissao_em?: string | null
+          teste_emissao_erro?: string | null
+          teste_emissao_ok?: boolean | null
           updated_at?: string
         }
         Relationships: []
