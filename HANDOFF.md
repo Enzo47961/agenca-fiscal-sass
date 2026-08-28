@@ -123,7 +123,13 @@ conflito. O `git am` do 0013 falhava porque a **pilha inteira** faltava, não po
 divergência de conteúdo — diagnóstico que custou uma sessão inteira por ter sido lido
 como "conflito no 0013".
 
-### Migrations (14, aplicam limpas — `db reset` verificado em 10/08/2026, Postgres 17)
+### Migrations (**30 em 27/08/2026**; a lista abaixo é de 10/08 e não foi refeita)
+
+> A contagem cresceu com as rodadas de 14–15/08 (convites, cancelamento,
+> relatório, LGPD, saúde) e 26–27/08 (prontidão no provider, mapa de municípios,
+> teste de emissão). `db reset` verificado limpo em 27/08/2026. A lista abaixo
+> ficou como registro do que existia em 10/08 — para o inventário atual, use
+> `ls supabase/migrations/`, que é a fonte que não envelhece.
 
 ```
 20260705000000_init.sql
@@ -813,7 +819,132 @@ automático é o que transforma 600 investigações em 600 tentativas mais N cor
 
 ---
 
+## 6.6 A rodada de onboarding em escala (26–27/08/2026)
+
+Cinco PRs, do defeito que impedia o primeiro cadastro real até a validação de
+carteira inteira. **De 475 para 563 testes.**
+
+| PR | O quê | Por que existiu |
+|---|---|---|
+| #13 | CRT numérico + `habilita_nfse` | Dois defeitos que quebrariam o PRIMEIRO cadastro real |
+| #14 | Cadastro em lote com reconciliação | 600 CNPJs eram 600 operações manuais |
+| #15 | Desliga o e-mail do provedor; avisa sobre IM | Tomador receberia a mesma nota duas vezes |
+| #16 | Guarda de prontidão | Nota nascia condenada e falhava longe de quem corrige |
+| #17 | Mapa de municípios, validação local, teste de emissão | Não gastar crédito para descobrir o óbvio |
+
+### As decisões de arquitetura que valem sobreviver
+
+**Reconciliar antes de criar.** `POST /v2/empresas` não tem chave de
+idempotência. Se um POST for processado com a resposta perdida, repetir cria
+DUPLICATA no provedor — irreversível do nosso lado. `GET /v2/empresas` pagina de
+50 em 50, então conferir 600 empresas custa 12 requisições contra 600. O ganho
+colateral é maior que o direto: **o job vira idempotente e auto-curável**, e
+rodar de novo passa a ser barato o bastante para virar rotina.
+
+**Id órfão NÃO é recadastrado.** Some do provedor, vira `falhou` com explicação.
+O CNPJ pode continuar lá sob outro id, e "corrigir" criaria a duplicata que todo
+o desenho evita.
+
+**O controle de taxa é configuração, não código.** `throttle` no nível da
+função, e o limite é 60 (não 100) de propósito: os 40 restantes ficam para a
+emissão. Migração de carteira é trabalho de fundo — a nota de quem está
+faturando agora não pode ficar atrás dela.
+
+**Três camadas com custos diferentes**, e a ordem existe para gastar o mínimo:
+
+| Camada | Custo | Resolve |
+|---|---|---|
+| Mapa de municípios | ~56 créditos/semana | quem emite, quem tem homologação, quem exige o quê |
+| Validação local | **zero** | impossível, indisponível, incompleto, pronto |
+| Teste de emissão | 1 por empresa | o que só se descobre tentando |
+
+**`null` nunca vira `false`.** Quando o provedor não informa se um campo é
+obrigatório, não cobramos. Barrar por ausência de informação impediria emissão
+legítima, e o custo do falso positivo é maior que o de um crédito gasto. Vale
+para o mapa de municípios e para a guarda de prontidão.
+
+**A guarda de prontidão NÃO barra por certificado ausente**, e isso é o mais
+importante dela. Existem municípios que autenticam por login/senha, e
+`certificado_valido_ate` só é preenchido quando o certificado passa por nós —
+quem subiu direto no painel do provedor emite normalmente. Barra só o certo:
+empresa que não existe no provedor, e certificado VENCIDO.
+
+**Eixos separados no banco.** `provider_status` diz se a empresa EXISTE no
+provedor; `teste_emissao_ok` diz se ela CONSEGUE emitir. Uma empresa pode estar
+perfeitamente cadastrada e ser recusada por falta de habilitação municipal —
+misturar as duas apagaria justamente a distinção que o teste revela.
+
+**Mensagem de recusa não é classificada.** Adivinhar pelo texto se a recusa foi
+"de configuração" ou "de dado" seria interpretação de string livre que muda sem
+aviso, e um diagnóstico confiante e falso é pior que nenhum.
+
+### O que mudou no inventário
+
+**Funções Inngest: 10.** As novas são `sincronizar-carteira-provider`,
+`cadastrar-empresa-provider`, `sincronizar-mapa-municipios` (cron semanal) e
+`testar-emissao-empresa`. Toda função nova DEVE ser registrada em
+`src/app/api/inngest/route.ts`.
+
+**Colunas novas em `empresas`:** `provider_status` (enum), `provider_erro`,
+`provider_sincronizado_em`, `codigo_servico_teste`, `teste_emissao_em`,
+`teste_emissao_ok`, `teste_emissao_erro`.
+
+**Tabela nova:** `municipios_nfse` — REFERÊNCIA, não tenant. Sem `empresa_id`,
+leitura para todo autenticado, escrita só pelo job. Mesmo desenho de
+`cst_ibscbs`.
+
+**Variável nova:** `FOCUSNFE_TOKEN_HOMOLOGACAO`, opcional. Os ambientes da Focus
+têm tokens distintos — reusar o de produção apontando para a URL de teste
+simplesmente não autentica.
+
+**Dois CHECKs que impedem estado mentiroso:** `'cadastrada'` exige
+`provider_empresa_id`; resultado de teste exige data. Deixar a coerência a cargo
+do código significaria confiar em todo caminho de escrita futuro.
+
+### ⚠️ O que NUNCA foi exercido contra a Focus real
+
+Tudo desta rodada foi testado contra mock e fetch falso. **Nada tocou a API de
+verdade** — o `FOCUSNFE_TOKEN` não está em produção, e o
+`FOCUSNFE_TOKEN_HOMOLOGACAO` depende do CNPJ, que depende do escritório.
+
+Tratar a primeira execução real como parte do piloto, com poucas empresas antes
+das 600. É onde os defeitos de integração aparecem, e nenhum teste local
+substitui isso.
+
+### Pendências que sobraram, em ordem
+
+1. **`FOCUSNFE_TOKEN` em produção** — destrava tudo o mais.
+2. **`FOCUSNFE_TOKEN_HOMOLOGACAO`** — destrava a camada 3.
+3. **Interface para informar o código de serviço e disparar a rodada de testes**
+   — deixada de fora de propósito: tela que ninguém consegue exercitar envelhece
+   errado. O painel já avisa quantas empresas estão sem o código.
+4. **Certificado em lote** — continua uma empresa por vez. Deixou de ser
+   bloqueio de implantação depois do PR #14, mas volta a ser em carteira grande.
+5. **`codigo_tributacao_municipal_iss`** — agora sabemos QUAIS municípios o
+   exigem (`codigo_tributario_obrigatorio` no mapa) e a validação local já o
+   reporta como pendência. Falta coletar e enviar o campo.
+
+---
+
 ## 7. Armadilhas conhecidas (não repita)
+
+**A rota de municípios da Focus NÃO leva `/v2`.** É `/municipios/{codigo}`,
+enquanto empresas e notas são `/v2/...`. Está assim na documentação oficial e
+custaria uma sessão de depuração se descoberto em produção.
+
+**Os tokens da Focus são POR AMBIENTE.** A documentação diz que entre
+homologação e produção "muda apenas a URL base do servidor e o token".
+Instanciar o provider com o token de produção apontando para a URL de
+homologação não autentica.
+
+**`.select()` do Supabase precisa de string LITERAL.** Concatenar com `+` quebra
+a inferência de tipos e o retorno vira `GenericStringError` — o erro aparece
+como "Property 'x' does not exist", longe da causa.
+
+**Não criar branch a partir de outra branch de trabalho.** Aconteceu em 27/08: a
+branch de feature saiu da de docs, e o PR levou os dois commits juntos, deixando
+o PR de docs vazio. Sem perda, mas o grafo fica confuso. `git checkout main`
+antes de `git checkout -b`.
 
 1. **`declaracaoDaNota` escrita dentro da função Inngest sem teste** foi reconhecida como
    a "ponte de falha silenciosa" e movida para `ibscbs.ts` como `declaracaoDeColunas`,
