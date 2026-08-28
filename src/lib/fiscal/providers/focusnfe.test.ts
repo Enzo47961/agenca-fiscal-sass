@@ -1138,3 +1138,132 @@ describe("FocusNfeProvider.listarEmpresas", () => {
     await expect(provider.listarEmpresas!()).rejects.toBeInstanceOf(FiscalErrorTransient);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Mapa de municipios — a camada que evita gastar credito para descobrir o obvio.
+// ---------------------------------------------------------------------------
+
+describe("FocusNfeProvider.listarMunicipios", () => {
+  const mun = (n: number, inicio: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      codigo_municipio: 3500000 + inicio + i,
+      nome_municipio: "Cidade " + (inicio + i),
+      sigla_uf: "sp",
+      nfse_habilitada: true,
+      possui_ambiente_homologacao_nfse: true,
+      requer_certificado_nfse: true,
+    }));
+
+  it("usa a rota SEM o prefixo /v2 e pagina de 100 em 100", async () => {
+    // A rota de municipios nao leva o /v2 do resto da API. Esta assim na
+    // documentacao oficial, e e o tipo de detalhe que so aparece em producao.
+    const { provider, chamadas } = criarProvider([
+      { status: 200, corpo: mun(100, 0) },
+      { status: 200, corpo: mun(12, 100) },
+    ]);
+
+    const r = await provider.listarMunicipios!();
+
+    expect(r).toHaveLength(112);
+    expect(chamadas).toHaveLength(2);
+    expect(chamadas[0]!.url).toContain("/municipios?offset=0&limit=100");
+    expect(chamadas[0]!.url).not.toContain("/v2/municipios");
+    expect(chamadas[1]!.url).toContain("offset=100");
+  });
+
+  it("traduz os campos do provedor para o vocabulario do dominio", async () => {
+    const { provider } = criarProvider([
+      {
+        status: 200,
+        corpo: [
+          {
+            codigo_municipio: "3550308",
+            nome_municipio: "São Paulo",
+            sigla_uf: "SP",
+            nfse_habilitada: true,
+            possui_ambiente_homologacao_nfse: false,
+            possui_cancelamento_nfse: true,
+            requer_certificado_nfse: true,
+            provedor_nfse: "Ginfes",
+            status_nfse: "ativo",
+            codigo_cnae_obrigatorio_nfse: true,
+            codigo_tributario_municipio_obrigatorio_nfse: false,
+          },
+        ],
+      },
+    ]);
+
+    const [m] = await provider.listarMunicipios!();
+    expect(m).toMatchObject({
+      codigoIbge: "3550308",
+      nome: "São Paulo",
+      uf: "SP",
+      nfseHabilitada: true,
+      possuiHomologacao: false,
+      possuiCancelamento: true,
+      requerCertificado: true,
+      provedor: "Ginfes",
+      status: "ativo",
+      cnaeObrigatorio: true,
+      codigoTributarioObrigatorio: false,
+    });
+  });
+
+  it("campo ausente vira null, e NAO false", async () => {
+    // "Nao sei" e diferente de "nao exige". Converter um no outro faria o
+    // sistema afirmar dispensa que ninguem verificou.
+    const { provider } = criarProvider([
+      { status: 200, corpo: [{ codigo_municipio: "3550308", nome_municipio: "X", sigla_uf: "SP" }] },
+    ]);
+
+    const [m] = await provider.listarMunicipios!();
+    expect(m!.possuiHomologacao).toBeNull();
+    expect(m!.requerCertificado).toBeNull();
+    expect(m!.cnaeObrigatorio).toBeNull();
+    // `nfse_habilitada` e a excecao: ausente significa nao habilitada.
+    expect(m!.nfseHabilitada).toBe(false);
+  });
+
+  it("normaliza a UF para maiuscula", async () => {
+    const { provider } = criarProvider([
+      { status: 200, corpo: [{ codigo_municipio: "3550308", nome_municipio: "X", sigla_uf: "sp" }] },
+    ]);
+    const [m] = await provider.listarMunicipios!();
+    expect(m!.uf).toBe("SP");
+  });
+
+  it("descarta linha sem codigo IBGE de 7 digitos", async () => {
+    const { provider } = criarProvider([
+      {
+        status: 200,
+        corpo: [
+          { codigo_municipio: "3550308", nome_municipio: "Boa", sigla_uf: "SP" },
+          { codigo_municipio: "123", nome_municipio: "Torta", sigla_uf: "SP" },
+        ],
+      },
+    ]);
+    const r = await provider.listarMunicipios!();
+    expect(r).toHaveLength(1);
+    expect(r[0]!.nome).toBe("Boa");
+  });
+
+  it("resposta fora do contrato NAO vira mapa vazio", async () => {
+    // Mapa vazio faria a validacao concluir que nenhum municipio tem regras
+    // conhecidas — e mandaria a carteira inteira para o teste as cegas.
+    const { provider } = criarProvider([{ status: 200, corpo: { municipios: [] } }]);
+    await expect(provider.listarMunicipios!()).rejects.toBeInstanceOf(FiscalErrorTransient);
+  });
+
+  it("429 carrega os segundos ate o reset, como nos outros caminhos", async () => {
+    const { provider } = criarProvider([
+      { status: 429, corpo: {}, cabecalhos: { "Rate-Limit-Reset": "18" } },
+    ]);
+    try {
+      await provider.listarMunicipios!();
+      expect.unreachable("deveria ter lancado");
+    } catch (e) {
+      const bruto = (e as FiscalErrorTransient).payloadBruto as { resetSegundos: number };
+      expect(bruto.resetSegundos).toBe(18);
+    }
+  });
+});

@@ -203,6 +203,33 @@ export interface EmpresaNoProvider {
   cnpj: string;
 }
 
+/**
+ * Regras de NFS-e de um município, como o provedor as conhece.
+ *
+ * Os campos são nullish porque o provedor só os preenche quando conhece a
+ * implementação daquele município — e "não sei" é informação diferente de
+ * "não exige". Tratar `null` como `false` faria o sistema afirmar que um campo
+ * é dispensável quando ninguém verificou.
+ */
+export interface MunicipioNfse {
+  codigoIbge: string;
+  nome: string;
+  uf: string;
+  nfseHabilitada: boolean;
+  possuiHomologacao: boolean | null;
+  possuiCancelamento: boolean | null;
+  requerCertificado: boolean | null;
+  provedor: string | null;
+  status: string | null;
+  previsaoReimplementacao: string | null;
+  ultimaEmissao: string | null;
+  enderecoObrigatorio: boolean | null;
+  cpfCnpjObrigatorio: boolean | null;
+  cnaeObrigatorio: boolean | null;
+  itemListaServicoObrigatorio: boolean | null;
+  codigoTributarioObrigatorio: boolean | null;
+}
+
 export interface FiscalProvider {
   readonly nome: string;
 
@@ -302,4 +329,18 @@ export interface FiscalProvider {
    * requisições por minuto, compartilhado com a emissão do dia.
    */
   listarEmpresas?(): Promise<EmpresaNoProvider[]>;
+
+  /**
+   * Baixa o mapa de municípios com as regras de NFS-e de cada um.
+   *
+   * POR QUE VALE A PENA CACHEAR ISTO. O provedor confirmou que não existe fluxo
+   * automatizado de onboarding e que a validação é por empresa. Mas o mapa
+   * responde de graça o que, sem ele, custaria uma tentativa de emissão por
+   * empresa: se o município tem NFS-e, se tem ambiente de teste, quais campos
+   * exige e se está no ar agora.
+   *
+   * O país inteiro cabe em poucas dezenas de requisições e muda devagar — o que
+   * o torna barato o bastante para ser rotina, e não operação.
+   */
+  listarMunicipios?(): Promise<MunicipioNfse[]>;
 }
